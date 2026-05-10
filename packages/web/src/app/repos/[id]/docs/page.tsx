@@ -1,11 +1,16 @@
 "use client";
 
-import { use, useState } from "react";
+import { use, useMemo, useState } from "react";
+import useSWR from "swr";
 import { Download, FolderArchive, Loader2 } from "lucide-react";
 import { Button } from "@repowise-dev/ui/ui/button";
+import { FirstFiveFiles, type FirstFiveFile } from "@repowise-dev/ui/onboarding/first-five-files";
 import { DocsExplorer } from "@/components/docs/docs-explorer";
-import { listAllPages } from "@/lib/api/pages";
+import { listAllPages, listPages } from "@/lib/api/pages";
+import { getGraph } from "@/lib/api/graph";
+import type { DocPage } from "@repowise-dev/types/docs";
 import { downloadTextFile } from "@/lib/utils/download";
+import type { GraphExportResponse } from "@/lib/api/types";
 
 export default function DocsPage({
   params,
@@ -14,6 +19,46 @@ export default function DocsPage({
 }) {
   const { id: repoId } = use(params);
   const [isExporting, setIsExporting] = useState(false);
+
+  const { data: graphData } = useSWR<GraphExportResponse>(
+    `graph:${repoId}`,
+    () => getGraph(repoId),
+    { revalidateOnFocus: false, revalidateOnReconnect: false },
+  );
+
+  const { data: docPages } = useSWR<DocPage[]>(
+    `docs-list:${repoId}`,
+    () => listPages(repoId, { limit: 1000 }),
+    { revalidateOnFocus: false },
+  );
+
+  const pageByPath = useMemo(() => {
+    const m = new Map<string, DocPage>();
+    for (const p of docPages ?? []) {
+      if (p.target_path) m.set(p.target_path, p);
+    }
+    return m;
+  }, [docPages]);
+
+  const startHere: Array<FirstFiveFile & { page_id?: string }> = useMemo(() => {
+    if (!graphData) return [];
+    const entries = graphData.nodes.filter((n) => n.is_entry_point);
+    const pool = entries.length > 0 ? entries : graphData.nodes;
+    return [...pool]
+      .sort((a, b) => b.pagerank - a.pagerank)
+      .slice(0, 5)
+      .map((n) => {
+        const page = pageByPath.get(n.node_id);
+        return {
+          file_path: n.node_id,
+          is_entry_point: n.is_entry_point,
+          has_doc: page !== undefined,
+          pagerank: n.pagerank,
+          reason: n.is_entry_point ? "entry point" : "high centrality",
+          page_id: page?.id,
+        };
+      });
+  }, [graphData, pageByPath]);
 
   const handleExportAll = async () => {
     setIsExporting(true);
@@ -63,6 +108,32 @@ export default function DocsPage({
           </Button>
         </div>
       </div>
+
+      {startHere.length > 0 && (
+        <div className="px-4 sm:px-6 pt-3">
+          <details className="rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-surface)]">
+            <summary className="cursor-pointer list-none px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] flex items-center gap-2 hover:bg-[var(--color-bg-elevated)] transition-colors">
+              <span className="text-[var(--color-accent-primary)]">✨</span>
+              Start here
+              <span className="text-[10px] font-normal text-[var(--color-text-tertiary)] uppercase tracking-wider">
+                first {startHere.length} files to read
+              </span>
+            </summary>
+            <div className="px-3 pb-3 pt-1">
+              <FirstFiveFiles
+                files={startHere}
+                title="Start here"
+                hrefFor={(f) => {
+                  const pageId = (f as FirstFiveFile & { page_id?: string }).page_id;
+                  return pageId
+                    ? `/repos/${repoId}/docs?page=${encodeURIComponent(pageId)}`
+                    : undefined;
+                }}
+              />
+            </div>
+          </details>
+        </div>
+      )}
 
       {/* Explorer */}
       <div className="flex-1 min-h-0">
