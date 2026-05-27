@@ -244,6 +244,44 @@ _NEVER_FLAG_PATTERNS: tuple[str, ...] = (
     "*_string.go",
     "*zz_generated*.go",
     "*bindata.go",
+    # ---- JavaScript conventions ------------------------------------------
+    # ``fnmatch`` ``*`` spans ``/`` (see the Go note above), so leading-``*``
+    # suffix globs match nested asset paths too.
+    # esbuild / rollup / webpack bundle outputs and minified artifacts are
+    # build products served to the browser, not module-imported by name.
+    "*.bundle.js",
+    "*.min.js",
+    "*.bundle.mjs",
+    # LiveReload ships a generated browser-global script set (IIFE /
+    # ``window.LiveReload =``) under ``livereload/gen/`` plus the
+    # ``livereload.js`` shim — loaded via a ``<script>`` tag, never imported.
+    "*/livereload/gen/*",
+    "livereload/gen/*",
+    "*/livereload/livereload.js",
+    "livereload/livereload.js",
+    # Hugo embeds a WASM toolchain whose JS glue under ``internal/warpc/js``
+    # is shipped as a bundle and loaded by the Go side via ``go:embed``,
+    # never by a JS importer.
+    "*wasm_exec.js",
+    # ---- Vendored / third-party C ----------------------------------------
+    # A vendored C library (``deps/`` / ``vendor/`` / ``third_party/``) is a
+    # self-contained unit: its structs/typedefs and functions are used within
+    # the dependency's own translation units, not exported to the host repo
+    # by a statement the graph sees. Flagging its internals as dead is noise —
+    # the dependency is maintained upstream, not here. (Hugo's
+    # ``internal/warpc/deps/parson`` JSON lib is the canonical case.)
+    "*/deps/**/*.c",
+    "*/deps/**/*.h",
+    "deps/**/*.c",
+    "deps/**/*.h",
+    "*/vendor/**/*.c",
+    "*/vendor/**/*.h",
+    "vendor/**/*.c",
+    "vendor/**/*.h",
+    "*/third_party/**/*.c",
+    "*/third_party/**/*.h",
+    "third_party/**/*.c",
+    "third_party/**/*.h",
 )
 
 # Decorator patterns that indicate framework usage (route handlers, fixtures, etc.)
