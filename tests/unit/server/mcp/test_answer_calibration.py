@@ -279,3 +279,259 @@ async def test_synthesized_answer_carries_grounded_quotes(setup_mcp, monkeypatch
     assert q["path"] == "pkg/alpha/one.py"
     assert q["lines"][0] == 10
     assert "MIN_COUNT = 2" in q["quote"]
+    # A constant's body IS its one-line assignment — it belongs in `quotes`,
+    # never the `symbol_bodies` definition block.
+    assert not result.get("symbol_bodies")
+
+
+_FN_BODY_SYMBOL = {
+    "name": "min_count_policy",
+    "kind": "function",
+    "signature": "def min_count_policy() -> int",
+    "docstring": "Returns the default minimum count.",
+    "start_line": 10,
+    "end_line": 12,
+    "_matched": True,
+    "source_excerpt": "def min_count_policy() -> int:\n    # gate retries\n    return MIN_COUNT",
+}
+
+
+@pytest.mark.asyncio
+async def test_named_function_carries_inline_body(setup_mcp, monkeypatch):
+    """A named function symbol surfaces its full body in symbol_bodies so the
+    agent skips the get_symbol follow-up."""
+    import repowise.server.mcp_server.tool_answer.answer as answer_mod
+    from repowise.server.mcp_server import get_answer
+
+    _patch_pipeline(monkeypatch, answer_mod, with_symbols=True, symbol=_FN_BODY_SYMBOL)
+    _patch_provider(
+        monkeypatch,
+        answer_mod,
+        "min_count_policy gates the retry loop (pkg/alpha/one.py).",
+    )
+
+    result = await get_answer("How does min_count_policy work?")
+    bodies = result.get("symbol_bodies")
+    assert bodies, "a named function symbol must carry an inline body"
+    [b] = bodies
+    assert b["path"] == "pkg/alpha/one.py"
+    assert b["name"] == "min_count_policy"
+    assert "return MIN_COUNT" in b["source"]
+    assert b["lines"] == [10, 12]
+    # Body served whole → no continuation pointer.
+    assert "truncated" not in b
+
+
+@pytest.mark.asyncio
+async def test_inline_body_truncation_emits_continuation(setup_mcp, monkeypatch):
+    """When the indexed body is longer than the hydrated excerpt, the body
+    block names the exact range read for the remainder."""
+    import repowise.server.mcp_server.tool_answer.answer as answer_mod
+    from repowise.server.mcp_server import get_answer
+
+    big = dict(_FN_BODY_SYMBOL, end_line=60)  # excerpt covers 10-12, body ends at 60
+    _patch_pipeline(monkeypatch, answer_mod, with_symbols=True, symbol=big)
+    _patch_provider(
+        monkeypatch,
+        answer_mod,
+        "min_count_policy gates the retry loop (pkg/alpha/one.py).",
+    )
+
+    result = await get_answer("How does min_count_policy work?")
+    [b] = result["symbol_bodies"]
+    assert b["truncated"] is True
+    assert b["continuation"] == "pkg/alpha/one.py:13-60"
+
+
+# ---------------------------------------------------------------------------
+# Symbol anchoring — force the defining file of a question-named symbol into
+# the candidate set when fuzzy retrieval missed it.
+# ---------------------------------------------------------------------------
+
+
+class _Sym:
+    def __init__(
+        self,
+        name,
+        file_path,
+        kind="method",
+        parent_name=None,
+        qualified_name=None,
+        start_line=1,
+        end_line=10,
+    ):
+        self.name = name
+        self.file_path = file_path
+        self.kind = kind
+        self.parent_name = parent_name
+        self.qualified_name = qualified_name or name
+        self.start_line = start_line
+        self.end_line = end_line
+
+
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+class _FakeSession:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def execute(self, *a, **k):
+        return _FakeResult(self._rows)
+
+
+@pytest.mark.asyncio
+async def test_anchor_injects_defining_file_as_dominant_hit():
+    from repowise.server.mcp_server.tool_answer.symbols import _anchor_symbol_hits
+
+    rows = [
+        _Sym(
+            "extract_all",
+            "core/decisions/extractor.py",
+            parent_name="DecisionExtractor",
+            qualified_name="DecisionExtractor.extract_all",
+        )
+    ]
+    hits = [{"target_path": "core/pipeline/incremental.py", "score": 3.6}]
+    out = await _anchor_symbol_hits(
+        _FakeSession(rows), "repo1", {"extract_all", "DecisionExtractor"}, hits
+    )
+    assert out[0]["target_path"] == "core/decisions/extractor.py"
+    assert out[0]["_symbol_anchored"] is True
+    assert out[0]["score"] > 3.6  # dominates the fuzzy top hit
+
+
+@pytest.mark.asyncio
+async def test_anchor_skips_ambiguous_homonym():
+    from repowise.server.mcp_server.tool_answer.symbols import _anchor_symbol_hits
+
+    rows = [
+        _Sym("extract_all", "a/x.py", parent_name="A", qualified_name="A.extract_all"),
+        _Sym("extract_all", "b/y.py", parent_name="B", qualified_name="B.extract_all"),
+    ]
+    hits = [{"target_path": "c/z.py", "score": 2.0}]
+    out = await _anchor_symbol_hits(_FakeSession(rows), "r", {"extract_all"}, hits)
+    assert all(not h.get("_symbol_anchored") for h in out)
+    assert out[0]["target_path"] == "c/z.py"  # nothing injected
+
+
+@pytest.mark.asyncio
+async def test_anchor_disambiguates_homonym_by_named_parent():
+    from repowise.server.mcp_server.tool_answer.symbols import _anchor_symbol_hits
+
+    rows = [
+        _Sym("extract_all", "a/x.py", parent_name="Alpha", qualified_name="Alpha.extract_all"),
+        _Sym(
+            "extract_all",
+            "b/y.py",
+            parent_name="DecisionExtractor",
+            qualified_name="DecisionExtractor.extract_all",
+        ),
+    ]
+    hits = [{"target_path": "c/z.py", "score": 2.0}]
+    out = await _anchor_symbol_hits(
+        _FakeSession(rows), "r", {"extract_all", "DecisionExtractor"}, hits
+    )
+    assert out[0]["target_path"] == "b/y.py"
+
+
+@pytest.mark.asyncio
+async def test_anchor_boosts_existing_hit_without_duplicating():
+    from repowise.server.mcp_server.tool_answer.symbols import _anchor_symbol_hits
+
+    rows = [_Sym("get_symbol", "mcp/tool_symbol.py", kind="function", qualified_name="get_symbol")]
+    hits = [
+        {"target_path": "mcp/tool_symbol.py", "score": 9.4},
+        {"target_path": "other.py", "score": 7.9},
+    ]
+    out = await _anchor_symbol_hits(_FakeSession(rows), "r", {"get_symbol"}, hits)
+    paths = [h["target_path"] for h in out]
+    assert paths.count("mcp/tool_symbol.py") == 1  # boosted, not duplicated
+    anchored = next(h for h in out if h["target_path"] == "mcp/tool_symbol.py")
+    assert anchored["_symbol_anchored"] is True
+    assert anchored["score"] >= 9.4
+
+
+# ---------------------------------------------------------------------------
+# code_rationale — the T4 lever: in-code rationale recovered when the wiki /
+# decision corpus could not ground the question (low-confidence exits).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_hedged_answer_surfaces_code_rationale(setup_mcp, monkeypatch, tmp_path):
+    """Hedged synthesis → mine the cited source for the rationale comment."""
+    import repowise.server.mcp_server as mcp_mod
+    import repowise.server.mcp_server.tool_answer.answer as answer_mod
+    from repowise.server.mcp_server import get_answer
+
+    _patch_pipeline(monkeypatch, answer_mod, with_symbols=True, symbol=_FN_SYMBOL)
+    _patch_provider(
+        monkeypatch,
+        answer_mod,
+        "The provided excerpts do not include the body of min_count_policy.",
+    )
+    (tmp_path / "pkg" / "alpha").mkdir(parents=True)
+    (tmp_path / "pkg" / "alpha" / "one.py").write_text(
+        "# min_count_policy defaults to 2 because the retry budget assumes\n"
+        "# at least two attempts before giving up.\n"
+        "MIN_COUNT = 2\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mcp_mod, "_repo_path", str(tmp_path))
+
+    result = await get_answer("What is the default value of min_count_policy?")
+    assert result["confidence"] == "low"
+    assert "code_rationale" in result
+    assert any("retry budget" in r["comment"] for r in result["code_rationale"])
+    assert result["code_rationale"][0]["path"] == "pkg/alpha/one.py"
+
+
+@pytest.mark.asyncio
+async def test_gated_answer_surfaces_code_rationale(setup_mcp, monkeypatch, tmp_path):
+    """Ambiguous retrieval (gated, no synthesis) → still mine source rationale."""
+    import repowise.server.mcp_server as mcp_mod
+    import repowise.server.mcp_server.tool_answer.answer as answer_mod
+    from repowise.server.mcp_server import get_answer
+
+    # Two near-tied hits (4.0 vs 3.8) → dominance gate fails → best_guesses path.
+    async def _fake_retrieve(question, ctx):
+        return [
+            {"page_id": "file_page:pkg/alpha/one.py", "score": 4.0},
+            {"page_id": "file_page:pkg/alpha/two.py", "score": 3.8},
+        ]
+
+    async def _fake_hydrate(hits, ctx, *, scope=None):
+        for h in hits:
+            h["target_path"] = h["page_id"].removeprefix("file_page:")
+            h["title"] = h["target_path"]
+            h["summary"] = "Module summary."
+            h["snippet"] = ""
+            h["page_type"] = "file_page"
+        return hits
+
+    monkeypatch.setattr(answer_mod, "_hybrid_retrieve", _fake_retrieve)
+    monkeypatch.setattr(answer_mod, "_hydrate_hits", _fake_hydrate)
+
+    (tmp_path / "pkg" / "alpha").mkdir(parents=True)
+    (tmp_path / "pkg" / "alpha" / "one.py").write_text(
+        "# We chunk uploads at 8MB instead of streaming because the gateway\n"
+        "# buffers the whole body and OOMs on larger payloads.\n"
+        "CHUNK = 8\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mcp_mod, "_repo_path", str(tmp_path))
+
+    result = await get_answer("why do uploads chunk at 8mb")
+    assert result["confidence"] == "low"
+    assert "best_guesses" in result  # confirms we hit the gated path
+    assert "code_rationale" in result
+    assert any("OOMs" in r["comment"] for r in result["code_rationale"])
