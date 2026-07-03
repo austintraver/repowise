@@ -12,8 +12,17 @@ from __future__ import annotations
 
 import hashlib
 import math
-import struct
 from typing import Protocol, runtime_checkable
+
+
+class EmbedderConfigError(ValueError):
+    """Raised when an embedder is misconfigured, e.g. an invalid env value.
+
+    Distinct from a provider being unavailable: code that falls back to
+    :class:`MockEmbedder` when an SDK or credential is missing must let this
+    propagate. Otherwise a configuration typo would silently disable semantic
+    search instead of reporting the mistake.
+    """
 
 
 @runtime_checkable

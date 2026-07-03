@@ -10,6 +10,7 @@ from typing import Any, ClassVar
 
 import pytest
 
+from repowise.core.providers.embedding.base import EmbedderConfigError
 from repowise.core.providers.embedding.ollama import OllamaEmbedder
 
 
@@ -118,3 +119,70 @@ def test_qwen3_dimensions_are_inferred() -> None:
     assert OllamaEmbedder(model="qwen3-embedding:0.6b").dimensions == 1024
     assert OllamaEmbedder(model="qwen3-embedding:4b").dimensions == 2560
     assert OllamaEmbedder(model="qwen3-embedding:8b").dimensions == 4096
+
+
+def test_timeout_defaults_to_thirty_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OLLAMA_EMBEDDING_TIMEOUT", raising=False)
+    monkeypatch.delenv("REPOWISE_EMBEDDING_TIMEOUT", raising=False)
+    assert OllamaEmbedder(model="embeddinggemma")._timeout == 30.0
+
+
+def test_timeout_can_come_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OLLAMA_EMBEDDING_TIMEOUT", "120")
+    assert OllamaEmbedder(model="embeddinggemma")._timeout == 120.0
+
+
+def test_repowise_embedding_timeout_is_a_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OLLAMA_EMBEDDING_TIMEOUT", raising=False)
+    monkeypatch.setenv("REPOWISE_EMBEDDING_TIMEOUT", "90")
+    assert OllamaEmbedder(model="embeddinggemma")._timeout == 90.0
+
+
+def test_explicit_timeout_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OLLAMA_EMBEDDING_TIMEOUT", "120")
+    assert OllamaEmbedder(model="embeddinggemma", timeout=5.0)._timeout == 5.0
+
+
+async def test_env_timeout_is_applied_to_the_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OLLAMA_EMBEDDING_TIMEOUT", "300")
+    embedder = OllamaEmbedder(model="embeddinggemma")
+
+    await embedder.embed(["one"])
+
+    assert _FakeAsyncClient.calls[0]["timeout"] == 300.0
+
+
+@pytest.mark.parametrize("bad_value", ["abc", "thirty", "30s", "1,5"])
+def test_timeout_rejects_non_numeric(monkeypatch: pytest.MonkeyPatch, bad_value: str) -> None:
+    monkeypatch.setenv("OLLAMA_EMBEDDING_TIMEOUT", bad_value)
+    with pytest.raises(EmbedderConfigError):
+        OllamaEmbedder(model="embeddinggemma")
+
+
+@pytest.mark.parametrize("bad_value", ["0", "-5", "-0.1"])
+def test_timeout_rejects_non_positive(monkeypatch: pytest.MonkeyPatch, bad_value: str) -> None:
+    monkeypatch.setenv("OLLAMA_EMBEDDING_TIMEOUT", bad_value)
+    with pytest.raises(EmbedderConfigError):
+        OllamaEmbedder(model="embeddinggemma")
+
+
+@pytest.mark.parametrize("bad_value", ["inf", "-inf", "nan"])
+def test_timeout_rejects_non_finite(monkeypatch: pytest.MonkeyPatch, bad_value: str) -> None:
+    monkeypatch.setenv("OLLAMA_EMBEDDING_TIMEOUT", bad_value)
+    with pytest.raises(EmbedderConfigError):
+        OllamaEmbedder(model="embeddinggemma")
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_timeout_falls_back_to_default(monkeypatch: pytest.MonkeyPatch, blank: str) -> None:
+    monkeypatch.setenv("OLLAMA_EMBEDDING_TIMEOUT", blank)
+    monkeypatch.delenv("REPOWISE_EMBEDDING_TIMEOUT", raising=False)
+    assert OllamaEmbedder(model="embeddinggemma")._timeout == 30.0
+
+
+def test_ollama_timeout_takes_precedence_over_repowise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OLLAMA_EMBEDDING_TIMEOUT", "120")
+    monkeypatch.setenv("REPOWISE_EMBEDDING_TIMEOUT", "90")
+    assert OllamaEmbedder(model="embeddinggemma")._timeout == 120.0

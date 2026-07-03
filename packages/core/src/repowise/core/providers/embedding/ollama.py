@@ -12,6 +12,8 @@ from typing import Any
 
 import httpx
 
+from repowise.core.providers.embedding.base import EmbedderConfigError
+
 _DEFAULT_BASE_URL = "http://localhost:11434"
 _DEFAULT_MODEL = "embeddinggemma"
 _DEFAULT_TIMEOUT = 30.0
@@ -39,6 +41,34 @@ def _infer_dimensions(model: str) -> int:
     return 768
 
 
+_TIMEOUT_ENV_VARS = ("OLLAMA_EMBEDDING_TIMEOUT", "REPOWISE_EMBEDDING_TIMEOUT")
+
+
+def resolve_embedding_timeout() -> float | None:
+    """Resolve the embed-request timeout (seconds) from the environment.
+
+    Reads ``OLLAMA_EMBEDDING_TIMEOUT`` then ``REPOWISE_EMBEDDING_TIMEOUT`` and
+    returns ``None`` when neither is set, so the caller's default applies. A
+    non-numeric, non-finite, or non-positive value raises
+    :class:`EmbedderConfigError` so the mistake surfaces instead of silently
+    disabling embeddings.
+    """
+    for name in _TIMEOUT_ENV_VARS:
+        raw = os.environ.get(name)
+        if raw is None or not raw.strip():
+            continue
+        try:
+            seconds = float(raw)
+        except ValueError:
+            raise EmbedderConfigError(f"{name} must be a number of seconds, got {raw!r}") from None
+        if not math.isfinite(seconds) or seconds <= 0:
+            raise EmbedderConfigError(
+                f"{name} must be a positive, finite number of seconds, got {raw!r}"
+            )
+        return seconds
+    return None
+
+
 class OllamaEmbedder:
     """Ollama embedding adapter implementing the repowise Embedder protocol.
 
@@ -47,6 +77,10 @@ class OllamaEmbedder:
         base_url: Ollama server URL. Defaults to ``http://localhost:11434``.
         dimensions: Optional output dimension hint. Also sent to Ollama as
             ``dimensions`` when provided.
+        timeout: Per-request timeout in seconds. Falls back to the
+            ``OLLAMA_EMBEDDING_TIMEOUT`` / ``REPOWISE_EMBEDDING_TIMEOUT`` env
+            vars, then ``30.0``. Raise it when embedding long pages on a slow
+            local model that would otherwise exceed the default and be dropped.
     """
 
     def __init__(
@@ -54,7 +88,7 @@ class OllamaEmbedder:
         model: str | None = None,
         base_url: str | None = None,
         dimensions: int | None = None,
-        timeout: float = _DEFAULT_TIMEOUT,
+        timeout: float | None = None,
     ) -> None:
         self._model = (
             model
@@ -70,7 +104,11 @@ class OllamaEmbedder:
         )
         self._requested_dimensions = dimensions or (int(env_dimensions) if env_dimensions else None)
         self._dimensions = self._requested_dimensions or _infer_dimensions(self._model)
-        self._timeout = timeout
+        if timeout is not None:
+            self._timeout = timeout
+        else:
+            env_timeout = resolve_embedding_timeout()
+            self._timeout = env_timeout if env_timeout is not None else _DEFAULT_TIMEOUT
 
     @property
     def dimensions(self) -> int:

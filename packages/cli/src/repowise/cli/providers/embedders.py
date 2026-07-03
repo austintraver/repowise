@@ -10,6 +10,8 @@ def _embedder_kwargs(embedder_name: str) -> dict[str, Any]:
     kwargs: dict[str, Any] = {}
     model = os.environ.get("REPOWISE_EMBEDDING_MODEL")
     if embedder_name == "ollama":
+        from repowise.core.providers.embedding.ollama import resolve_embedding_timeout
+
         model = os.environ.get("OLLAMA_EMBEDDING_MODEL") or model
         base_url = os.environ.get("OLLAMA_BASE_URL")
         dimensions = os.environ.get("OLLAMA_EMBEDDING_DIMS") or os.environ.get(
@@ -19,6 +21,9 @@ def _embedder_kwargs(embedder_name: str) -> dict[str, Any]:
             kwargs["base_url"] = base_url
         if dimensions:
             kwargs["dimensions"] = int(dimensions)
+        timeout = resolve_embedding_timeout()
+        if timeout is not None:
+            kwargs["timeout"] = timeout
     elif embedder_name == "gemini":
         dimensions = os.environ.get("REPOWISE_EMBEDDING_DIMS")
         if dimensions:
@@ -68,12 +73,16 @@ def build_embedder(embedder_name_resolved: str) -> Any:
     the same backend selection logic isn't duplicated. Real providers fall
     back to the deterministic mock when their SDK/credentials are unavailable.
     """
-    from repowise.core.providers.embedding.base import MockEmbedder
+    from repowise.core.providers.embedding.base import EmbedderConfigError, MockEmbedder
     from repowise.core.providers.embedding.registry import get_embedder
 
     if embedder_name_resolved == "mock":
         return MockEmbedder()
     try:
         return get_embedder(embedder_name_resolved, **_embedder_kwargs(embedder_name_resolved))
+    except EmbedderConfigError:
+        # A misconfigured value (e.g. an invalid OLLAMA_EMBEDDING_TIMEOUT) must
+        # surface, not silently downgrade to MockEmbedder and disable search.
+        raise
     except Exception:
         return MockEmbedder()
