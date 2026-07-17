@@ -386,6 +386,7 @@ to the model's baseline commit, not this repo.
 |------|-------------|
 | `--path` | Path to the git repository (default: current directory) |
 | `--ext` | Comma-separated file suffixes to count (e.g. `.py` or `.ts,.tsx`) |
+| `--exclude` / `-x` | Gitignore-style path pattern to omit. Repeatable; filters both the change and baseline. Root `.riskignore` patterns also apply. |
 | `--baseline` | Recent commits to sample for the repo-relative percentile (default 200; `0` shows only the absolute calibrated band) |
 | `--format` | Output format: `table` (default) or `json` |
 
@@ -393,6 +394,7 @@ to the model's baseline commit, not this repo.
 repowise risk                 # score HEAD
 repowise risk main..HEAD      # score a branch / PR range as one change
 repowise risk --ext .ts,.tsx  # restrict to specific suffixes
+repowise risk main..HEAD -x 'tests/' -x '*.spec.ts'  # omit tests from scoring
 ```
 
 See [`docs/CHANGE_RISK.md`](./CHANGE_RISK.md) for the scoring model.
@@ -844,7 +846,7 @@ If `PATH` is omitted, `repowise mcp` first walks upward from the current directo
 |------|-------------|
 | `--transport` | `stdio` (default, for editors), `streamable-http` (for HTTP clients), or `sse` (legacy) |
 | `--port` | Port for HTTP/SSE transports (default: 7338) |
-| `--tools` | Override which tools are exposed. A comma-separated list is an explicit allowlist; prefix names with `+`/`-` to adjust the default set (e.g. `+get_dependency_path,-get_dead_code`); `lean` selects the five-tool agent-lean profile. Overrides the `mcp.tools` config block. |
+| `--tools` | Override which tools are exposed. A comma-separated list is an explicit allowlist; prefix names with `+`/`-` to adjust the default set (e.g. `+get_dependency_path,-get_dead_code`); `lean` selects the six-tool agent-lean profile. Overrides the `mcp.tools` config block. |
 | `--all` | Expose every available tool, including opt-in and workspace tools |
 
 ```bash

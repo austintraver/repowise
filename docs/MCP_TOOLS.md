@@ -2,7 +2,7 @@
 
 repowise exposes a curated set of tools via the [Model Context Protocol](https://modelcontextprotocol.io) (MCP). These tools give AI coding assistants (Claude Code, Codex, Cursor, Cline, Windsurf) structured access to your codebase intelligence: dependency graph, git history, documentation, and architectural decisions.
 
-16 tools are registered in total. A single-repo server advertises 10 by default: the nine flagship tools below plus `list_repos`. Workspace mode adds 2 more automatically (`get_architecture`, `get_blast_radius`), for 12. Four further tools are off by default everywhere and must be opted in. The surface is configurable; see [Configuring the tool surface](#configuring-the-tool-surface).
+17 tools are registered in total. A single-repo server advertises 11 by default: the ten flagship tools below plus `list_repos`. Workspace mode adds 2 more automatically (`get_architecture`, `get_blast_radius`), for 13. Four further tools are off by default everywhere and must be opted in. The surface is configurable; see [Configuring the tool surface](#configuring-the-tool-surface).
 
 **Start the MCP server:**
 
@@ -16,7 +16,7 @@ repowise mcp --transport sse --port 7338 # legacy SSE transport
 
 ---
 
-## The nine flagship tools
+## The ten flagship tools
 
 | Tool | Purpose | Typical use |
 |------|---------|-------------|
@@ -26,6 +26,7 @@ repowise mcp --transport sse --port 7338 # legacy SSE transport
 | `get_symbol` | Raw source bytes for one symbol | When you need one function/class body |
 | `search_codebase` | Hybrid symbol / path / concept search | Finding a symbol or file, or discovering code by topic |
 | `get_risk` | Modification risk | Before changing hotspot files |
+| `get_change_risk` | Live commit or range risk | Before merging a commit or PR range |
 | `get_why` | Architectural decisions | Before structural changes |
 | `get_dead_code` | Unreachable code | Cleanup tasks |
 | `get_health` | Code-health marker scores | Before refactoring, find the worst files |
@@ -38,8 +39,8 @@ Also always on by default: `list_repos` (repo aliases). See [Supplementary tools
 
 The default surface is deliberately small: fewer, richer tools mean fewer round-trips and less schema overhead per task. What a server advertises is resolved from three things: each tool's `default`/`requires_workspace` metadata, whether the server is in workspace mode, and an optional override.
 
-- **Default (single-repo):** 10 tools, the nine flagship tools plus `list_repos`.
-- **Default (workspace):** those 10 plus `get_architecture` and `get_blast_radius`, added automatically when the server starts inside a workspace. They are never advertised outside one.
+- **Default (single-repo):** 11 tools, the ten flagship tools plus `list_repos`.
+- **Default (workspace):** those 11 plus `get_architecture` and `get_blast_radius`, added automatically when the server starts inside a workspace. They are never advertised outside one.
 - **Opt-in tools:** `get_dependency_path`, `get_execution_flows`, `generate_refactoring_code`, and `get_conformance` are registered but off by default. Turn them on per repo; `get_conformance` only does useful work in workspace mode (name it there).
 
 **Configure it in `.repowise/config.yaml`** under an `mcp.tools` key. Four shapes are supported:
@@ -328,6 +329,41 @@ When `changed_files` is passed, the response leads with a `directive` block. Its
 ```
 get_risk(targets=["src/auth/middleware.ts"])
 get_risk(changed_files=["src/api/routes.ts", "src/middleware/cors.ts"])
+```
+
+---
+
+## `get_change_risk`
+
+Live risk scoring for one commit or a `base..head` range. Unlike `get_risk`,
+which evaluates indexed files and can report blast radius, this scores the
+shape of the live diff and needs no index refresh.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `revspec` | string | No | Commit or `base..head` range to score (default `"HEAD"`) |
+| `repo` | string | No | *(workspace only)* Target repo alias |
+| `extensions` | list[string] | No | File suffixes to count, such as `[".py", ".ts"]` |
+| `exclude_patterns` | list[string] | No | Gitignore-style paths to omit; combined with root `.riskignore` rules |
+| `baseline` | int | No | Recent commits to sample for percentile ranking (default `200`; `0` disables percentile ranking) |
+
+**Returns:** The corpus-calibrated `score`, `probability`, and `level`, plus a
+repo-relative `risk_percentile`, `review_priority`, and `classification`.
+`baseline_sample_size` reports how many filtered commits informed the percentile;
+`features`, `drivers`, and combined `exclude_patterns` make the result auditable.
+Use the percentile and review priority for triage; the raw score is secondary
+context when no repository baseline is available.
+
+**When to use:** Before merging a commit or PR range, especially when you need
+to assess the diff itself rather than the risk of an already-indexed file.
+
+**Example calls:**
+
+```
+get_change_risk()
+get_change_risk(revspec="main..HEAD", extensions=[".py"], exclude_patterns=["tests/"])
 ```
 
 ---
