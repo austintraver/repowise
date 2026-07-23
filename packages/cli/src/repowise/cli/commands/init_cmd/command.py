@@ -85,6 +85,15 @@ from .reporting import show_analysis_summary, show_completion
 from .workspace import _workspace_init
 
 
+def resolve_init_wiki_style(requested_style: str | None, repo_path: Path) -> str:
+    """Resolve init's effective style, including repository-local custom styles."""
+
+    configured_style = None
+    if requested_style is None:
+        configured_style = load_config(repo_path).get("wiki_style")
+    return resolve_style(requested_style or configured_style, repo_path=repo_path).name
+
+
 def _record_init_outcome(
     *,
     result: Any,
@@ -960,9 +969,11 @@ def init_command(
         if generate_docs and wiki_style is None and not yes and is_interactive:
             wiki_style = prompt_wiki_style(console)
 
-    # Resolve the effective style (CLI flag > interactive prompt > default) and
-    # canonicalize it. Used by generation and persisted so update/restyle honor it.
-    wiki_style = resolve_style(wiki_style).name
+    # Resolve the effective style (CLI flag > interactive prompt > repository
+    # config > default) and canonicalize it. The repository path is required for
+    # custom styles under .repowise/styles; resolving without it silently turned
+    # a configured custom style into "comprehensive".
+    wiki_style = resolve_init_wiki_style(wiki_style, repo_path)
 
     editor_options = resolve_editor_setup_options(
         console,
