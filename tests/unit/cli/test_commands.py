@@ -294,6 +294,42 @@ class TestInitYesFlag:
             runner.invoke(cli, ["init", "-y", "--index-only", str(tmp_path)])
             assert not prompt_called, "-y should bypass the wiki-style interactive prompt"
 
+    def test_init_uses_custom_wiki_style_from_repo_config(self, tmp_path):
+        """A configured custom style remains selected during single-repo init."""
+        from repowise.cli.commands.init_cmd.command import resolve_init_wiki_style
+
+        style_dir = tmp_path / ".repowise" / "styles" / "operational-reference"
+        style_dir.mkdir(parents=True)
+        (style_dir / "style.yaml").write_text(
+            "\n".join(
+                (
+                    "description: Evidence-led operational reference.",
+                    "style_version: 1",
+                    "user_directive: Write only supported facts.",
+                )
+            ),
+            encoding="utf-8",
+        )
+        (tmp_path / ".repowise" / "config.yaml").write_text(
+            "wiki_style: operational-reference\n",
+            encoding="utf-8",
+        )
+
+        assert resolve_init_wiki_style(None, tmp_path) == "operational-reference"
+
+    def test_explicit_wiki_style_overrides_repo_config(self, tmp_path):
+        """An explicit built-in style still wins over the persisted choice."""
+        from repowise.cli.commands.init_cmd.command import resolve_init_wiki_style
+
+        config_dir = tmp_path / ".repowise"
+        config_dir.mkdir()
+        (config_dir / "config.yaml").write_text(
+            "wiki_style: tutorial\n",
+            encoding="utf-8",
+        )
+
+        assert resolve_init_wiki_style("reference", tmp_path) == "reference"
+
     def test_yes_skips_mode_select_on_tty(self, runner, tmp_path):
         """With -y on a TTY, the interactive mode-selection menu is never shown.
 
