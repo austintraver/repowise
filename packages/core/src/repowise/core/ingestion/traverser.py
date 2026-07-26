@@ -691,7 +691,7 @@ def _has_openapi_root_key(abs_path: Path) -> bool:
             return False
     else:
         try:
-            import yaml
+            import yaml  # type: ignore[import-untyped]
         except ImportError:
             return False
         try:
