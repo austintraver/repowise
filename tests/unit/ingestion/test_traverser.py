@@ -256,6 +256,26 @@ class TestFileTraverser:
         assert fi.size_bytes > 0
         assert fi.abs_path.endswith("calc.py")
 
+    def test_openapi_content_marks_generic_api_json_as_contract(self, tmp_path: Path) -> None:
+        (tmp_path / "service_api.json").write_text(
+            '{"openapi": "3.1.0", "info": {"title": "Service", "version": "1"}}'
+        )
+
+        files = list(FileTraverser(tmp_path).traverse())
+
+        assert len(files) == 1
+        assert files[0].is_api_contract is True
+
+    def test_non_openapi_api_json_is_not_a_contract(self, tmp_path: Path) -> None:
+        (tmp_path / "workflow_api.json").write_text(
+            '{"prompt": {"1": {"class_type": "LoadImage", "inputs": {}}}}'
+        )
+
+        files = list(FileTraverser(tmp_path).traverse())
+
+        assert len(files) == 1
+        assert files[0].is_api_contract is False
+
 
 # ---------------------------------------------------------------------------
 # Extra exclude patterns (CLI --exclude / settings["exclude_patterns"])

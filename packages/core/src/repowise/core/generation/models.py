@@ -212,11 +212,13 @@ class GenerationConfig:
         config: Mapping[str, Any],
         **overrides: Any,
     ) -> GenerationConfig:
-        """Build a generation config with the repo's documentation output limit.
+        """Build a generation config from persisted documentation settings.
 
         ``max_tokens`` is the persisted user-facing setting. Keeping its parsing
         here gives CLI, server, and core entry points one owner for translating
-        repo configuration into the provider request budget.
+        repo configuration into the provider request budget. Decision harvesting
+        is also persisted because scoped ``generate`` runs must honor the same
+        latency and cost choice made during ``init``.
         """
         raw_max_tokens = config.get("max_tokens", DEFAULT_MAX_TOKENS)
         if isinstance(raw_max_tokens, bool):
@@ -230,7 +232,15 @@ class GenerationConfig:
         if max_tokens <= 0:
             raise ValueError("max_tokens must be a positive integer")
 
-        values = {"max_tokens": max_tokens, **overrides}
+        harvest_decisions = config.get("harvest_decisions", True)
+        if not isinstance(harvest_decisions, bool):
+            raise ValueError("harvest_decisions must be a boolean")
+
+        values = {
+            "max_tokens": max_tokens,
+            "harvest_decisions": harvest_decisions,
+            **overrides,
+        }
         return cls(**values)
 
     def __post_init__(self) -> None:

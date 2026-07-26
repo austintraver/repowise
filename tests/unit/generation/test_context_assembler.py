@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import networkx as nx
 
 from repowise.core.generation.context_assembler import (
@@ -272,8 +274,29 @@ def test_assemble_module_page_public_symbols(
         graph_metrics["community"],
         sample_source_bytes,
     )
+    fc = dataclasses.replace(
+        fc,
+        symbols=[
+            *fc.symbols,
+            {
+                "name": "PUBLIC_VALUE",
+                "kind": "variable",
+                "signature": "PUBLIC_VALUE = dict(",
+                "visibility": "public",
+            },
+        ],
+    )
     ctx = assembler.assemble_module_page("python_pkg", "python", [fc], sample_graph)
     assert ctx.public_symbols >= 0
+    assert ctx.public_api == [
+        {
+            "path": "python_pkg/calculator.py",
+            "signatures": [
+                "class Calculator:",
+                "def add(self, a: int, b: int) -> int:",
+            ],
+        }
+    ]
 
 
 # ---------------------------------------------------------------------------

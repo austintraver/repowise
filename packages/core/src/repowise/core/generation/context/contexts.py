@@ -136,6 +136,9 @@ class ModulePageContext:
     external_systems: list[dict] = field(default_factory=list)
     # Top files inside the module by PageRank, for the "key files" section.
     key_files: list[dict] = field(default_factory=list)
+    # Exact public signatures from the highest-PageRank files. This is a
+    # representative, bounded subset used to ground the generated API summary.
+    public_api: list[dict] = field(default_factory=list)
     top_owners: list[dict] = field(default_factory=list)
 
 

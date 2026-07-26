@@ -23,16 +23,25 @@ log = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _MIN_ENTRY_POINT_SCORE = 0.3
+# Tier-3 global-name call resolution carries confidence 0.50. Those edges are
+# useful as search hints, but they are not strong enough to support a narrated
+# execution path: common calls such as ``append`` and ``encode`` can otherwise
+# jump between unrelated packages. Keep flows on same-file, import-scoped, and
+# receiver-resolved calls.
+_MIN_FLOW_CALL_CONFIDENCE = 0.75
 
 # Name patterns for entry point scoring (compiled once)
 _TIER1_NAMES = re.compile(
-    r"^(main|run|start|serve|cli|__main__|app|execute|bootstrap|init)$", re.IGNORECASE,
+    r"^(main|run|start|serve|cli|__main__|app|execute|bootstrap|init)$",
+    re.IGNORECASE,
 )
 _TIER2_NAMES = re.compile(
-    r"^(handle_|on_|dispatch_|process_|route_|do_)", re.IGNORECASE,
+    r"^(handle_|on_|dispatch_|process_|route_|do_)",
+    re.IGNORECASE,
 )
 _TIER3_NAMES = re.compile(
-    r"^(get_|create_|execute_|invoke_|fetch_|submit_|send_|post_)", re.IGNORECASE,
+    r"^(get_|create_|execute_|invoke_|fetch_|submit_|send_|post_)",
+    re.IGNORECASE,
 )
 
 # Files to exclude from entry point scoring — test, demo, fixture, etc.
@@ -109,7 +118,7 @@ def _build_call_degree_maps(
     out_deg: dict[str, int] = defaultdict(int)
     in_deg: dict[str, int] = defaultdict(int)
     for u, v, d in graph.edges(data=True):
-        if d.get("edge_type") == "calls":
+        if d.get("edge_type") == "calls" and d.get("confidence", 0) >= _MIN_FLOW_CALL_CONFIDENCE:
             out_deg[u] += 1
             in_deg[v] += 1
     return out_deg, in_deg
@@ -203,7 +212,9 @@ def _score_entry_point(
 
 
 def _get_call_successors(
-    node_id: str, graph: nx.DiGraph, out_deg: dict[str, int],
+    node_id: str,
+    graph: nx.DiGraph,
+    out_deg: dict[str, int],
 ) -> list[str]:
     """Get outgoing call targets, sorted by out-degree descending.
 
@@ -215,7 +226,7 @@ def _get_call_successors(
     for _, target, d in graph.out_edges(node_id, data=True):
         if (
             d.get("edge_type") == "calls"
-            and d.get("confidence", 0) >= 0.5
+            and d.get("confidence", 0) >= _MIN_FLOW_CALL_CONFIDENCE
             and not _is_excluded_node(graph, target)
         ):
             successors.append(target)
@@ -332,7 +343,9 @@ def trace_execution_flows(
 
     if graph.number_of_nodes() == 0:
         return ExecutionFlowReport(
-            total_entry_points_scored=0, total_flows=0, flows=[],
+            total_entry_points_scored=0,
+            total_flows=0,
+            flows=[],
         )
 
     out_deg, in_deg = _build_call_degree_maps(graph)
@@ -360,7 +373,7 @@ def trace_execution_flows(
     # whether it produced a long enough trace below.
     entry_point_scores = {node_id: score for node_id, score in candidates}
 
-    top_candidates = candidates[:config.max_flows]
+    top_candidates = candidates[: config.max_flows]
 
     # Trace from each candidate
     flows: list[ExecutionFlow] = []

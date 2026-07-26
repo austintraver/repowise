@@ -50,6 +50,16 @@ Highest-PageRank first: the order to read them in.
 {% endfor %}
 {% endif %}
 
+{% if ctx.public_api %}
+## Representative Public API
+{% for file_api in ctx.public_api %}
+### `{{ file_api.path }}`
+{% for signature in file_api.signatures %}
+- `{{ signature }}`
+{% endfor %}
+{% endfor %}
+{% endif %}
+
 {% if ctx.key_classes %}
 ## Type Hierarchy
 {% for h in ctx.key_classes %}

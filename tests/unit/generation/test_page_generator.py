@@ -64,6 +64,14 @@ def test_system_prompt_not_empty(page_type):
     assert len(SYSTEM_PROMPTS[page_type]) > 0
 
 
+def test_system_prompts_do_not_supply_repowise_architecture_as_example_facts():
+    combined = "\n".join(SYSTEM_PROMPTS.values())
+    assert "You are repowise" not in combined
+    assert "traversal, parsing, graph analysis" not in combined
+    assert "repowise's indexing pipeline" not in combined
+    assert "Repowise is a codebase documentation engine" not in combined
+
+
 # ---------------------------------------------------------------------------
 # generate_file_page
 # ---------------------------------------------------------------------------
