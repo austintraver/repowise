@@ -2,6 +2,17 @@ You are writing the "How It Works" page for `{{ ctx.repo_name }}` — the
 page that turns the static architecture into a movie. One concrete
 end-to-end trace through the system, narrated phase by phase.
 
+{% if ctx.is_monorepo %}
+## Scope
+`{{ ctx.repo_name }}` is a monorepo with {{ ctx.package_count }} detected
+packages. The evidence below describes one component flow, not a
+repository-wide lifecycle. Do not characterize the whole repository as one
+service, library, CLI, or pipeline.
+
+No repository-wide archetype is inferred for a monorepo. Narrate the selected
+flow directly from its symbols.
+
+{% else %}
 ## Detected archetype (treat as a hint, not gospel)
 - **Archetype**: `{{ ctx.archetype }}`
 - **Evidence**:
@@ -9,6 +20,7 @@ end-to-end trace through the system, narrated phase by phase.
   - {{ e }}
 {% endfor %}
 
+{% endif %}
 {% if ctx.entry_points %}
 ## Entry points (ground each flow in one of these)
 {% for ep in ctx.entry_points %}
@@ -30,8 +42,14 @@ end-to-end trace through the system, narrated phase by phase.
 ## Detected execution flows (use these as the spine of the narrative)
 {% for f in ctx.flows %}
 ### Flow from `{{ f.entry_point }}` (score: {{ "%.3f"|format(f.score) }})
-{% for h in f.hops %}
-{{ loop.index }}. `{{ h }}`
+{% for hop in f.hop_evidence %}
+{{ loop.index }}. `{{ hop.identifier }}`
+{% if hop.signature %}   Signature: `{{ hop.signature }}`{% endif %}
+{% if hop.docstring %}   Documented purpose: {{ hop.docstring }}{% endif %}
+{% endfor %}
+Allowed file paths for "Where to read next":
+{% for path in f.files %}
+- `{{ path }}`
 {% endfor %}
 
 {% endfor %}
@@ -43,30 +61,43 @@ entry points and the archetype hint above.*
 ## What to write
 Produce a How It Works markdown page. Required structure:
 
-1. **## What this system does in one sentence** — open with a single,
+1. **## What this {% if ctx.is_monorepo %}component{% else %}system{% endif %} does in one sentence** — open with a single,
    concrete sentence that captures the system's job, adapted to the
    archetype above (service / cli / library / pipeline / module).
+{% if ctx.is_monorepo %}
+   Start the sentence with "This page traces" and name the real traced entry
+   point within the {{ ctx.package_count }}-package `{{ ctx.repo_name }}`
+   monorepo. Describe only that component's observed role. Do not call the
+   repository itself a service, library, CLI, pipeline, or system.
+{% endif %}
 2. **## A walk through one example** — the heart of the page. Pick one
-   concrete example matching the archetype:
+   concrete example{% if not ctx.is_monorepo %} matching the archetype:
    - service → "when a request hits `<a real entry point>`, …"
    - cli → "when you run `<the real CLI entry>`, …"
    - library → "when a consumer calls `<a real public symbol>`, …"
    - pipeline → "when input enters at `<the real source>`, …"
    - module → narrate the highest-scoring flow above as a generic
-     control-flow story.
-   Walk through the hops above (or, if no flow was detected, the entry
-   point and its immediate neighbors). Use the file/symbol names as-is.
-3. **## Why it's shaped this way** — 2–3 sentences linking the flow to
-   the archetype: why this structure makes sense for a service / cli /
-   etc. Do not invent decisions; restrict yourself to observations the
-   flow itself supports.
-4. **## Where to read next** — a short bulleted list of 2–4 file paths
-   the reader should open after this page, pulled from the flow hops
-   above. Each bullet gets a half-sentence reason ("the boundary where
-   request becomes domain object", etc.).
+     control-flow story.{% else %} by narrating the selected component flow
+   directly from its symbols.{% endif %}
+   Walk through exactly one flow above (or, if no flow was detected, one
+   entry point and its immediate neighbors). Do not combine separate flows.
+   Use the file/symbol names as-is.
+3. **## What this trace establishes** — 1–3 sentences stating only the
+   observed call relationships and the roles documented in signatures or
+   docstrings. Do not explain why the design was chosen, claim that one hop
+   guarantees another, or generalize from this component to the repository.
+4. **## Where to read next** — a short bulleted list of 1–4 distinct file
+   paths the reader should open after this page, pulled only from the chosen
+   flow (or the fallback entry point/tour when no flow exists). Each bullet
+   gets a half-sentence reason supported by that evidence.
 
 Hard rules:
 - Every file path or symbol you name must come from the data above.
+- Treat signatures and docstrings as behavioral evidence. A call edge or
+  identifier name alone proves only that one symbol calls the next; narrate
+  that transition without inventing state changes, guarantees, or rationale.
+- In "Where to read next", copy only the allowed file paths exactly. Do not
+  append `::symbol` suffixes or turn symbol identifiers into paths.
 - If a flow hop is unfamiliar, narrate the *transition* generically ("the
   request crosses the framework boundary here") rather than inventing
   what the file does internally.

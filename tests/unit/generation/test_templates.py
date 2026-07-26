@@ -136,6 +136,12 @@ def module_page_ctx() -> ModulePageContext:
         pagerank_mean=0.3,
         files=["python_pkg/calculator.py", "python_pkg/models.py"],
         directories=["python_pkg"],
+        public_api=[
+            {
+                "path": "python_pkg/calculator.py",
+                "signatures": ["class Calculator:", "def add(self, a: int, b: int) -> int:"],
+            }
+        ],
     )
 
 
@@ -159,6 +165,12 @@ def test_module_page_names_the_group_and_where_it_lives(jinja_env, module_page_c
     result = render(jinja_env, "module_page.j2", module_page_ctx)
     assert module_page_ctx.title in result
     assert "python_pkg" in result
+
+
+def test_module_page_contains_exact_representative_api(jinja_env, module_page_ctx):
+    result = render(jinja_env, "module_page.j2", module_page_ctx)
+    assert "class Calculator:" in result
+    assert "def add(self, a: int, b: int) -> int:" in result
 
 
 # ---------------------------------------------------------------------------
