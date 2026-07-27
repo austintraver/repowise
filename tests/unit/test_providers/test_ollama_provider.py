@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -19,32 +19,6 @@ def test_supported_reasoning_modes_are_auto_and_off():
     provider = OllamaProvider(model="test")
 
     assert provider.supported_reasoning_modes() == ("auto", "off")
-
-
-def test_generation_timeout_uses_ollama_environment(monkeypatch):
-    monkeypatch.setenv("OLLAMA_GENERATION_TIMEOUT", "900")
-
-    with patch("repowise.core.providers.llm.ollama.AsyncOpenAI") as client:
-        OllamaProvider(model="test")
-
-    client.assert_called_once_with(
-        api_key="ollama",
-        base_url="http://localhost:11434/v1",
-        timeout=900.0,
-    )
-
-
-def test_explicit_generation_timeout_overrides_environment(monkeypatch):
-    monkeypatch.setenv("OLLAMA_GENERATION_TIMEOUT", "900")
-
-    with patch("repowise.core.providers.llm.ollama.AsyncOpenAI") as client:
-        OllamaProvider(model="test", timeout=1200)
-
-    client.assert_called_once_with(
-        api_key="ollama",
-        base_url="http://localhost:11434/v1",
-        timeout=1200,
-    )
 
 
 def test_available_model_options_reads_local_tags(monkeypatch):

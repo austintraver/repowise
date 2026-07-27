@@ -504,8 +504,6 @@ The `.repowise/.env` file is gitignored automatically.
 | `REPOWISE_MODEL` | Override model |
 | `REPOWISE_DOC_MODEL` | Override the model used for `get_answer` synthesis specifically |
 | `REPOWISE_REASONING` | Override `reasoning` (see valid values above) |
-| `REPOWISE_GENERATION_TIMEOUT` | Fallback Ollama generation request timeout in seconds |
-| `OLLAMA_GENERATION_TIMEOUT` | Ollama generation request timeout in seconds; overrides `REPOWISE_GENERATION_TIMEOUT` |
 
 ### Embeddings
 
