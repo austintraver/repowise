@@ -140,6 +140,10 @@ class OllamaProvider(BaseProvider):
                       The /v1 suffix is appended automatically if missing.
         rate_limiter: Optional RateLimiter (useful when running multiple
                       concurrent requests against a resource-constrained machine).
+        timeout:      Per-request timeout in seconds. Falls back to
+                      ``OLLAMA_GENERATION_TIMEOUT`` /
+                      ``REPOWISE_GENERATION_TIMEOUT`` and otherwise preserves the
+                      OpenAI SDK default.
     """
 
     def __init__(
@@ -147,12 +151,23 @@ class OllamaProvider(BaseProvider):
         model: str = "llama3.2",
         base_url: str | None = None,
         rate_limiter: RateLimiter | None = None,
+        timeout: float | None = None,
     ) -> None:
         resolved_base_url = base_url or os.environ.get("OLLAMA_BASE_URL") or _DEFAULT_BASE_URL
-        self._base_url = resolved_base_url.rstrip("/")
-        self._client = AsyncOpenAI(
-            api_key="ollama", base_url=_normalize_base_url(resolved_base_url)
+        env_timeout = os.environ.get("OLLAMA_GENERATION_TIMEOUT") or os.environ.get(
+            "REPOWISE_GENERATION_TIMEOUT"
         )
+        resolved_timeout = timeout if timeout is not None else (
+            float(env_timeout) if env_timeout else None
+        )
+        self._base_url = resolved_base_url.rstrip("/")
+        client_arguments: dict[str, Any] = {
+            "api_key": "ollama",
+            "base_url": _normalize_base_url(resolved_base_url),
+        }
+        if resolved_timeout is not None:
+            client_arguments["timeout"] = resolved_timeout
+        self._client = AsyncOpenAI(**client_arguments)
         self._model = model
         self._rate_limiter = rate_limiter
 
