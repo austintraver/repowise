@@ -79,6 +79,26 @@ def test_mock_store_is_allowed_when_no_table_exists(tmp_path: Path) -> None:
     assert providers.build_vector_store(tmp_path, MockEmbedder()) is not None
 
 
+def test_embedding_batch_size_env_reaches_lancedb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("REPOWISE_EMBEDDING_BATCH_SIZE", "1")
+
+    store = providers.build_vector_store(tmp_path, MockEmbedder())
+
+    assert store is not None
+    assert store._embed_batch_max_items == 1
+
+
+def test_embedding_batch_size_rejects_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("REPOWISE_EMBEDDING_BATCH_SIZE", "0")
+
+    with pytest.raises(ValueError, match="must be at least 1"):
+        providers.build_vector_store(tmp_path, MockEmbedder())
+
+
 async def test_real_embedder_still_rebuilds_a_differing_table(tmp_path: Path) -> None:
     """Only the mock is refused; a real re-embed is the intended rebuild."""
     await _seed_store(tmp_path, MockEmbedder())

@@ -38,10 +38,14 @@ EMBED_TEXT_MAX_CHARS = 30_000
 
 def iter_embed_chunks(
     items: list[tuple[str, str, dict]],
+    *,
+    max_items: int = EMBED_BATCH_MAX_ITEMS,
 ) -> Iterator[tuple[list[tuple[str, str, dict]], list[str]]]:
     """Yield ``(chunk, capped_texts)`` slices sized for one embedder request."""
-    for start in range(0, len(items), EMBED_BATCH_MAX_ITEMS):
-        chunk = items[start : start + EMBED_BATCH_MAX_ITEMS]
+    if max_items < 1:
+        raise ValueError("Embedding batch size must be at least 1.")
+    for start in range(0, len(items), max_items):
+        chunk = items[start : start + max_items]
         yield chunk, [text[:EMBED_TEXT_MAX_CHARS] for _, text, _ in chunk]
 
 

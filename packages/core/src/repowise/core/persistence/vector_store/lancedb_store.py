@@ -5,7 +5,7 @@ from __future__ import annotations
 from repowise.core.providers.embedding.base import Embedder
 
 from ..search import SearchResult
-from ._base import VectorStore, iter_embed_chunks
+from ._base import EMBED_BATCH_MAX_ITEMS, VectorStore, iter_embed_chunks
 
 __all__ = ["LanceDBVectorStore"]
 
@@ -46,10 +46,19 @@ class LanceDBVectorStore(VectorStore):
 
     _TABLE_NAME = "wiki_pages"
 
-    def __init__(self, db_path: str, embedder: Embedder, table_name: str | None = None) -> None:
+    def __init__(
+        self,
+        db_path: str,
+        embedder: Embedder,
+        table_name: str | None = None,
+        embed_batch_max_items: int = EMBED_BATCH_MAX_ITEMS,
+    ) -> None:
+        if embed_batch_max_items < 1:
+            raise ValueError("Embedding batch size must be at least 1.")
         self._db_path = db_path
         self._embedder = embedder
         self._table_name = table_name or self._TABLE_NAME
+        self._embed_batch_max_items = embed_batch_max_items
         self._db = None
         self._table = None
 
@@ -178,7 +187,10 @@ class LanceDBVectorStore(VectorStore):
         await self._ensure_connected()
         failed = 0
         last_exc: Exception | None = None
-        for chunk, texts in iter_embed_chunks(items):
+        for chunk, texts in iter_embed_chunks(
+            items,
+            max_items=self._embed_batch_max_items,
+        ):
             try:
                 vectors = await self._embedder.embed(texts)
                 await self._ensure_table(vectors[0])

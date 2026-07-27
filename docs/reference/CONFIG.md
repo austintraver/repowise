@@ -513,6 +513,7 @@ The `.repowise/.env` file is gitignored automatically.
 | `REPOWISE_EMBEDDING_MODEL` | Embedding model, applies to any embedder |
 | `REPOWISE_EMBEDDING_DIMS` | Embedding output dimensions (optional; inferred from the model otherwise) |
 | `REPOWISE_EMBEDDING_TIMEOUT` | Embed request timeout in seconds |
+| `REPOWISE_EMBEDDING_BATCH_SIZE` | Maximum pages per persisted embedding request (default: `16`); use a smaller batch for slow local embedders |
 | `OLLAMA_EMBEDDING_MODEL` | Ollama embedding model (also selects the `ollama` embedder) |
 | `OLLAMA_EMBEDDING_DIMS` | Ollama embedding output dimensions (optional; inferred from the model otherwise) |
 | `OLLAMA_EMBEDDING_TIMEOUT` | Ollama embed request timeout in seconds (default: `30`); raise it for long pages on slow local models |

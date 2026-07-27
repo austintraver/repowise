@@ -479,3 +479,22 @@ async def test_lancedb_embed_batch_isolates_failed_chunk(tmp_path):
         assert len(ids) == EMBED_BATCH_MAX_ITEMS * 2
     finally:
         await store.close()
+
+
+@pytest.mark.asyncio
+async def test_lancedb_embed_batch_honors_configured_batch_size(tmp_path):
+    pytest.importorskip("lancedb")
+    from repowise.core.persistence.vector_store import LanceDBVectorStore
+
+    emb = _RecordingEmbedder()
+    store = LanceDBVectorStore(
+        str(tmp_path / "lance"),
+        emb,
+        embed_batch_max_items=1,
+    )
+    try:
+        await store.embed_batch(_items(3))
+        assert [len(call) for call in emb.calls] == [1, 1, 1]
+        assert len(await store.list_page_ids()) == 3
+    finally:
+        await store.close()

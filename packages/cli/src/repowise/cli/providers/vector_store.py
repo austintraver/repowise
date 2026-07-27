@@ -2,10 +2,25 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 _TABLE_NAME = "wiki_pages"
+_DEFAULT_EMBED_BATCH_MAX_ITEMS = 16
+
+
+def embedding_batch_size_from_environment() -> int:
+    raw_value = os.getenv("REPOWISE_EMBEDDING_BATCH_SIZE")
+    if raw_value is None:
+        return _DEFAULT_EMBED_BATCH_MAX_ITEMS
+    try:
+        value = int(raw_value)
+    except ValueError as error:
+        raise ValueError("REPOWISE_EMBEDDING_BATCH_SIZE must be an integer.") from error
+    if value < 1:
+        raise ValueError("REPOWISE_EMBEDDING_BATCH_SIZE must be at least 1.")
+    return value
 
 
 def existing_vector_dim(lance_dir: Path) -> int | None:
@@ -84,6 +99,10 @@ def build_vector_store(repo_path: Path, embedder: Any) -> Any | None:
         from repowise.core.persistence.vector_store import LanceDBVectorStore
 
         lance_dir.mkdir(parents=True, exist_ok=True)
-        return LanceDBVectorStore(str(lance_dir), embedder=embedder)
+        return LanceDBVectorStore(
+            str(lance_dir),
+            embedder=embedder,
+            embed_batch_max_items=embedding_batch_size_from_environment(),
+        )
     except ImportError:
         return InMemoryVectorStore(embedder)
