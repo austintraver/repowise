@@ -68,6 +68,7 @@ async def run_scoped_generation(
     dry_run: bool,
     gate_cost: Any,
     interactive: bool = False,
+    on_page_ready: Any | None = None,
 ) -> GenerateOutcome | None:
     """Resolve the scope, gate on cost, generate, persist, and heal.
 
@@ -211,6 +212,7 @@ async def run_scoped_generation(
             fts=fts,
             progress=None,
             cost_tracker=cost_tracker,
+            on_page_ready=on_page_ready,
             concurrency=config.max_concurrency,
         )
 

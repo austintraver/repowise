@@ -194,6 +194,7 @@ async def execute_scoped_generation(
     fts: Any | None = None,
     progress: Any | None = None,
     cost_tracker: Any | None = None,
+    on_page_ready: Any | None = None,
     concurrency: int = 12,
 ) -> ScopedGenerationResult:
     """Generate the plan's pages, persist them, decay dependents, heal backlinks.
@@ -231,6 +232,7 @@ async def execute_scoped_generation(
         cost_tracker=cost_tracker,
         generation_config=generation_config,
         only_page_ids=plan.generate_ids,
+        on_page_ready=on_page_ready,
     )
     if cost_tracker is not None:
         await cost_tracker.flush()

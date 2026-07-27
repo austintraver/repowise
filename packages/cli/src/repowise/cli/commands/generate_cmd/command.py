@@ -170,6 +170,12 @@ def _make_gate(dry_run: bool):
 )
 @click.option("--yes", "-y", is_flag=True, default=False, help="Skip the cost confirmation.")
 @click.option("--verbose", "-v", is_flag=True, default=False, help="Show pipeline debug logs.")
+@click.option(
+    "--page-timings",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="Write one CSV row as each generated page becomes ready.",
+)
 def generate_command(
     path: str | None,
     all_pages: bool,
@@ -185,6 +191,7 @@ def generate_command(
     dry_run: bool,
     yes: bool,
     verbose: bool,
+    page_timings: Path | None,
 ) -> None:
     """Write the concept pages with a model. Bare `generate` writes the stubs.
 
@@ -287,6 +294,15 @@ def generate_command(
             embedder_upgraded = True
 
     start = time.monotonic()
+    timing_recorder = None
+    if page_timings is not None:
+        from .page_timings import PageTimingRecorder
+
+        try:
+            timing_recorder = PageTimingRecorder(page_timings)
+        except FileExistsError as error:
+            raise click.ClickException(str(error)) from error
+
     outcome = run_async(
         run_scoped_generation(
             repo_path,
@@ -300,6 +316,7 @@ def generate_command(
             dry_run=dry_run,
             gate_cost=_make_gate(dry_run),
             interactive=interactive,
+            on_page_ready=timing_recorder,
         )
     )
 
