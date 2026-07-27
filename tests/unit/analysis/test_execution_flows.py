@@ -59,9 +59,7 @@ def test_all_candidates_scored_are_exposed():
 def test_trace_follows_primary_chain():
     g = _chain_graph()
     report = trace_execution_flows(g, {}, FlowConfig(min_flow_depth=1))
-    main_flow = next(
-        f for f in report.flows if f.entry_point_id == "src/app.py::main"
-    )
+    main_flow = next(f for f in report.flows if f.entry_point_id == "src/app.py::main")
     # Primary path follows the highest-fan-out successor at each hop.
     assert main_flow.trace[:4] == [
         "src/app.py::main",
@@ -80,6 +78,44 @@ def test_trace_skips_test_nodes():
     report = trace_execution_flows(g, {}, FlowConfig(min_flow_depth=1))
     for flow in report.flows:
         assert not any("tests/" in node for node in flow.trace)
+
+
+def test_low_confidence_call_does_not_qualify_an_entry_point():
+    g = nx.DiGraph()
+    _sym(g, "src/app.py::run", "run")
+    _sym(g, "src/app.py::real_target", "real_target")
+    _sym(g, "src/unrelated.py::global_name_match", "global_name_match")
+    _call(g, "src/app.py::run", "src/app.py::real_target", confidence=0.95)
+    _call(g, "src/app.py::run", "src/unrelated.py::global_name_match", confidence=0.50)
+
+    report = trace_execution_flows(g, {}, FlowConfig(min_flow_depth=1))
+
+    assert report.entry_point_scores == {}
+    assert report.flows == []
+
+
+def test_trace_stops_before_low_confidence_global_name_match():
+    g = nx.DiGraph()
+    for node_id, name in [
+        ("src/app.py::run", "run"),
+        ("src/app.py::real_target", "real_target"),
+        ("src/app.py::leaf", "leaf"),
+        ("src/unrelated.py::global_name_match", "global_name_match"),
+    ]:
+        _sym(g, node_id, name)
+    _call(g, "src/app.py::run", "src/app.py::real_target", confidence=0.95)
+    _call(g, "src/app.py::run", "src/app.py::leaf", confidence=0.95)
+    _call(
+        g,
+        "src/app.py::real_target",
+        "src/unrelated.py::global_name_match",
+        confidence=0.50,
+    )
+
+    report = trace_execution_flows(g, {}, FlowConfig(min_flow_depth=1))
+    run_flow = next(flow for flow in report.flows if flow.entry_point_id == "src/app.py::run")
+
+    assert run_flow.trace == ["src/app.py::run", "src/app.py::real_target"]
 
 
 def test_min_flow_depth_filters_trivial_flows():

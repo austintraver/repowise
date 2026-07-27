@@ -16,6 +16,7 @@ It also detects monorepo structure and returns a RepoStructure.
 from __future__ import annotations
 
 import configparser
+import json
 import os
 import threading
 from collections.abc import Iterator
@@ -659,13 +660,44 @@ def _is_config_file(language: LanguageTag) -> bool:
 
 
 def _is_api_contract(abs_path: Path, language: LanguageTag) -> bool:
-    if language in ("proto", "graphql"):
+    if language in ("proto", "graphql", "openapi"):
         return True
     name_lower = abs_path.name.lower()
-    return any(
-        marker in name_lower
-        for marker in ("openapi", "swagger", "schema.graphql", "api.yaml", "api.json")
-    )
+    if "openapi" in name_lower or "swagger" in name_lower:
+        return True
+    if not name_lower.endswith(("api.json", "api.yaml", "api.yml")):
+        return False
+    return _has_openapi_root_key(abs_path)
+
+
+def _has_openapi_root_key(abs_path: Path) -> bool:
+    """Confirm that a generically named API file is an OpenAPI document.
+
+    Names ending in ``api.json`` or ``api.yaml`` are common for other formats,
+    including ComfyUI executable workflow graphs. Treating every such file as
+    an HTTP service contract misclassifies the repository archetype and feeds
+    service-only onboarding prompts false evidence.
+    """
+    try:
+        source = abs_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+    if abs_path.suffix.lower() == ".json":
+        try:
+            document = json.loads(source)
+        except ValueError:
+            return False
+    else:
+        try:
+            import yaml  # type: ignore[import-untyped]
+        except ImportError:
+            return False
+        try:
+            document = yaml.safe_load(source)
+        except yaml.YAMLError:
+            return False
+    return isinstance(document, dict) and bool({"openapi", "swagger"} & document.keys())
 
 
 def _stem_is_entry_point(abs_path: Path) -> bool:

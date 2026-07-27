@@ -9,6 +9,7 @@ Covers:
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -107,6 +108,9 @@ def _signals(
     tour_stops: tuple[dict, ...] = (),
     layer_order: tuple[str, ...] = (),
     completed_page_summaries: dict[str, str] | None = None,
+    execution_flows: list[SimpleNamespace] | None = None,
+    is_monorepo: bool = False,
+    package_count: int = 0,
 ) -> OnboardingSignals:
     paths = [f.file_info.path for f in files]
     pr = pagerank or {p: 0.1 for p in paths}
@@ -114,11 +118,11 @@ def _signals(
     # Minimal fake graph_builder — community_info / execution_flows return empty.
     graph_builder = SimpleNamespace(
         community_info=lambda: {},
-        execution_flows=lambda: SimpleNamespace(flows=[]),
+        execution_flows=lambda: SimpleNamespace(flows=execution_flows or []),
     )
     repo_structure = RepoStructure(
-        is_monorepo=False,
-        packages=[],
+        is_monorepo=is_monorepo,
+        packages=[SimpleNamespace(name=f"package-{index}") for index in range(package_count)],
         root_language_distribution={"python": 1.0},
         total_files=len(files),
         total_loc=len(files) * 50,
@@ -443,6 +447,96 @@ def test_how_it_works_fires_on_cli_archetype_via_entry_point() -> None:
     assert ctx.archetype == "cli"
 
 
+def test_how_it_works_uses_one_real_flow_instead_of_mixing_fallback_evidence() -> None:
+    spec = onboarding.get_spec(SLOT_HOW_IT_WORKS)
+    assert spec is not None
+    sig = _signals(
+        files=[
+            _file("src/main.py", is_entry_point=True, symbols=["main"]),
+            _file("src/service.py", symbols=["run"]),
+            _file("src/store.py", symbols=["save"]),
+        ],
+        entry_points=["src/main.py", "tools/admin.py"],
+        tour_stops=(),
+        execution_flows=[
+            SimpleNamespace(
+                entry_point="src/main.py::main",
+                trace=[
+                    "src/main.py::main",
+                    "src/service.py::run",
+                    "src/store.py::save",
+                ],
+                score=0.9,
+            ),
+            SimpleNamespace(
+                entry_point="tools/admin.py::main",
+                trace=[
+                    "tools/admin.py::main",
+                    "tools/report.py::build",
+                    "tools/output.py::write",
+                ],
+                score=0.8,
+            ),
+        ],
+    )
+    sig = dataclasses.replace(
+        sig,
+        kg_tour_steps=(
+            {
+                "order": 1,
+                "title": "Unrelated tour",
+                "nodeIds": ["file:docs/overview.md"],
+            },
+        ),
+    )
+
+    ctx = spec.build_context(sig)
+
+    assert ctx is not None
+    assert [flow.entry_point for flow in ctx.flows] == ["src/main.py::main"]
+    assert ctx.flows[0].files == ["src/main.py", "src/service.py", "src/store.py"]
+    assert ctx.flows[0].hop_evidence[1] == {
+        "identifier": "src/service.py::run",
+        "signature": "class run:",
+        "docstring": "Docstring for run.",
+    }
+    assert ctx.entry_points == []
+    assert ctx.kg_tour_steps == []
+
+
+def test_how_it_works_marks_monorepo_flow_as_component_scoped() -> None:
+    spec = onboarding.get_spec(SLOT_HOW_IT_WORKS)
+    assert spec is not None
+    sig = _signals(
+        files=[_file("packages/worker/main.py", is_entry_point=True)],
+        execution_flows=[
+            SimpleNamespace(
+                entry_point="packages/worker/main.py::main",
+                trace=[
+                    "packages/worker/main.py::main",
+                    "packages/worker/job.py::run",
+                    "packages/worker/output.py::write",
+                ],
+                score=0.9,
+            ),
+        ],
+        is_monorepo=True,
+        package_count=4,
+    )
+
+    ctx = spec.build_context(sig)
+
+    assert ctx is not None
+    assert ctx.is_monorepo is True
+    assert ctx.package_count == 4
+    rendered = _jinja_env().get_template("onboarding/how_it_works.j2").render(ctx=ctx)
+    assert "one component flow, not a" in rendered
+    assert "repository-wide lifecycle" in rendered
+    assert "Do not characterize the whole repository" in rendered
+    assert "No repository-wide archetype is inferred" in rendered
+    assert "## Detected archetype" not in rendered
+
+
 # ---------------------------------------------------------------------------
 # Development guide — gated on ≥2 structural signals
 # ---------------------------------------------------------------------------
@@ -691,8 +785,6 @@ def test_how_it_works_renders_curated_tour_steps() -> None:
     normalize into the strict template's expected shape — regression for the
     first docs run against a curated KG ('dict object' has no attribute
     'nodeIds')."""
-    import dataclasses
-
     spec = onboarding.get_spec(SLOT_HOW_IT_WORKS)
     assert spec is not None
     sig = _signals(
@@ -733,8 +825,6 @@ def test_how_it_works_renders_curated_tour_steps() -> None:
 
 def test_how_it_works_renders_legacy_tour_steps() -> None:
     """The pre-curation step shape (nodeIds + description) keeps working."""
-    import dataclasses
-
     spec = onboarding.get_spec(SLOT_HOW_IT_WORKS)
     assert spec is not None
     sig = _signals(

@@ -162,6 +162,16 @@ def test_generation_config_reads_repo_max_tokens():
     assert config.max_tokens == 2345
 
 
+def test_generation_config_reads_repo_decision_harvesting():
+    config = GenerationConfig.from_repo_config({"harvest_decisions": False})
+    assert config.harvest_decisions is False
+
+
+def test_generation_config_rejects_invalid_repo_decision_harvesting():
+    with pytest.raises(ValueError, match="harvest_decisions must be a boolean"):
+        GenerationConfig.from_repo_config({"harvest_decisions": "false"})
+
+
 @pytest.mark.parametrize("value", [0, -1, True, 1.5, "not-a-number"])
 def test_generation_config_rejects_invalid_repo_max_tokens(value):
     with pytest.raises(ValueError, match="positive integer"):

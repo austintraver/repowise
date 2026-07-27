@@ -30,30 +30,64 @@ _TOP_FLOWS = 3
 _TRACE_DISPLAY_HOPS = 8
 
 # Framework hints by ecosystem — anything matching tilts the archetype.
-_SERVICE_FRAMEWORK_HINTS: frozenset[str] = frozenset({
-    "fastapi", "flask", "starlette", "django", "uvicorn", "gunicorn",
-    "express", "koa", "hapi", "nestjs",
-    "Microsoft.AspNetCore", "Microsoft.AspNetCore.App",
-    "actix-web", "axum", "rocket",
-    "gin", "echo", "fiber",
-    "spring-boot", "spring-webmvc",
-})
-_CLI_FRAMEWORK_HINTS: frozenset[str] = frozenset({
-    "click", "typer", "argparse", "fire",
-    "commander", "yargs", "oclif",
-    "cobra", "urfave/cli",
-    "clap", "structopt",
-})
-_PIPELINE_HINTS: frozenset[str] = frozenset({
-    "celery", "airflow", "prefect", "dagster",
-    "apache-beam", "kafka", "rabbitmq",
-})
+_SERVICE_FRAMEWORK_HINTS: frozenset[str] = frozenset(
+    {
+        "fastapi",
+        "flask",
+        "starlette",
+        "django",
+        "uvicorn",
+        "gunicorn",
+        "express",
+        "koa",
+        "hapi",
+        "nestjs",
+        "Microsoft.AspNetCore",
+        "Microsoft.AspNetCore.App",
+        "actix-web",
+        "axum",
+        "rocket",
+        "gin",
+        "echo",
+        "fiber",
+        "spring-boot",
+        "spring-webmvc",
+    }
+)
+_CLI_FRAMEWORK_HINTS: frozenset[str] = frozenset(
+    {
+        "click",
+        "typer",
+        "argparse",
+        "fire",
+        "commander",
+        "yargs",
+        "oclif",
+        "cobra",
+        "urfave/cli",
+        "clap",
+        "structopt",
+    }
+)
+_PIPELINE_HINTS: frozenset[str] = frozenset(
+    {
+        "celery",
+        "airflow",
+        "prefect",
+        "dagster",
+        "apache-beam",
+        "kafka",
+        "rabbitmq",
+    }
+)
 
 
 @dataclass
 class FlowTrace:
     entry_point: str
     hops: list[str] = field(default_factory=list)
+    files: list[str] = field(default_factory=list)
+    hop_evidence: list[dict[str, str]] = field(default_factory=list)
     score: float = 0.0
 
 
@@ -65,6 +99,8 @@ class HowItWorksContext:
     flows: list[FlowTrace] = field(default_factory=list)
     entry_points: list[str] = field(default_factory=list)
     kg_tour_steps: list[dict] = field(default_factory=list)
+    is_monorepo: bool = False
+    package_count: int = 0
 
 
 def _classify_archetype(signals: OnboardingSignals) -> tuple[Archetype, list[str]]:
@@ -79,9 +115,7 @@ def _classify_archetype(signals: OnboardingSignals) -> tuple[Archetype, list[str
     cli_hits = dep_names & _CLI_FRAMEWORK_HINTS
     pipeline_hits = dep_names & _PIPELINE_HINTS
 
-    api_contract_count = sum(
-        1 for pf in signals.parsed_files if pf.file_info.is_api_contract
-    )
+    api_contract_count = sum(1 for pf in signals.parsed_files if pf.file_info.is_api_contract)
 
     # Service tilt wins if we have either framework deps or API contract files.
     if service_hits or api_contract_count > 0:
@@ -101,7 +135,9 @@ def _classify_archetype(signals: OnboardingSignals) -> tuple[Archetype, list[str
 
     # Entry-point shape — `__main__.py` or `bin/` is CLI-shaped.
     entry_points = list(getattr(signals.repo_structure, "entry_points", []))
-    if any(ep.endswith("__main__.py") or "/bin/" in ep or ep.startswith("bin/") for ep in entry_points):
+    if any(
+        ep.endswith("__main__.py") or "/bin/" in ep or ep.startswith("bin/") for ep in entry_points
+    ):
         evidence.append("entry point shape suggests a CLI (__main__ or bin/)")
         return "cli", evidence
 
@@ -124,15 +160,35 @@ def _collect_flows(signals: OnboardingSignals) -> list[FlowTrace]:
     if not report or not hasattr(report, "flows"):
         return []
 
+    symbol_evidence: dict[str, dict[str, str]] = {}
+    for parsed_file in signals.parsed_files:
+        for symbol in parsed_file.symbols:
+            symbol_evidence[symbol.id] = {
+                "identifier": symbol.id,
+                "signature": symbol.signature or "",
+                "docstring": symbol.docstring or "",
+            }
+
     flows: list[FlowTrace] = []
     for flow in getattr(report, "flows", [])[:_TOP_FLOWS]:
         trace = list(getattr(flow, "trace", []) or [])
         if len(trace) < _MIN_TRACE_HOPS:
             continue
+        displayed_trace = trace[:_TRACE_DISPLAY_HOPS]
+        files = list(dict.fromkeys(hop.split("::", 1)[0] for hop in displayed_trace))
+        hop_evidence = [
+            symbol_evidence.get(
+                hop,
+                {"identifier": hop, "signature": "", "docstring": ""},
+            )
+            for hop in displayed_trace
+        ]
         flows.append(
             FlowTrace(
                 entry_point=str(getattr(flow, "entry_point", "")),
-                hops=trace[:_TRACE_DISPLAY_HOPS],
+                hops=displayed_trace,
+                files=files,
+                hop_evidence=hop_evidence,
                 score=float(getattr(flow, "score", 0.0) or 0.0),
             )
         )
@@ -167,13 +223,28 @@ def _build(signals: OnboardingSignals) -> HowItWorksContext | None:
     if not flows and not kg_tour and archetype == "module":
         return None
 
+    # A How It Works page promises one concrete execution trace. Mixing that
+    # trace with repository-wide entry points and reading-tour nodes gives the
+    # model multiple unrelated narrative spines, especially in monorepos.
+    # Prefer the highest-scoring real trace and keep the broader signals only
+    # as a fallback when no trace was detected.
+    selected_flows = flows[:1]
+    entry_points = []
+    tour_steps = []
+    if not selected_flows:
+        entry_points = list(getattr(signals.repo_structure, "entry_points", []))[:5]
+        tour_steps = kg_tour[:8]
+
+    packages = getattr(signals.repo_structure, "packages", []) or []
     return HowItWorksContext(
         repo_name=signals.repo_name,
         archetype=archetype,
         archetype_evidence=evidence,
-        flows=flows,
-        entry_points=list(getattr(signals.repo_structure, "entry_points", []))[:5],
-        kg_tour_steps=kg_tour[:8],
+        flows=selected_flows,
+        entry_points=entry_points,
+        kg_tour_steps=tour_steps,
+        is_monorepo=bool(getattr(signals.repo_structure, "is_monorepo", False)),
+        package_count=len(packages),
     )
 
 

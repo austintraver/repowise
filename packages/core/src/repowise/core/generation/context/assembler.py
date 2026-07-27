@@ -371,6 +371,24 @@ class ContextAssembler:
             for fc in ranked
         ]
 
+        public_api: list[dict] = []
+        remaining_public_symbols = 40
+        for fc in ranked:
+            signatures = [
+                str(symbol.get("signature") or symbol.get("name") or "")
+                for symbol in fc.symbols
+                if symbol.get("visibility") == "public"
+                and symbol.get("kind") not in {"constant", "variable"}
+            ]
+            signatures = [signature for signature in signatures if signature][
+                : min(5, remaining_public_symbols)
+            ]
+            if signatures:
+                public_api.append({"path": fc.file_path, "signatures": signatures})
+                remaining_public_symbols -= len(signatures)
+            if remaining_public_symbols == 0:
+                break
+
         # Aggregate ownership from git metadata: who maintains the most
         # files in this module.
         top_owners: list[dict] = []
@@ -435,6 +453,7 @@ class ContextAssembler:
             dead_code_findings=dead_code_findings or [],
             external_systems=external_systems or [],
             key_files=key_files,
+            public_api=public_api,
             top_owners=top_owners,
             scope=scope,
             is_rollup=is_rollup,
