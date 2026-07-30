@@ -92,3 +92,51 @@ def test_ephemeral_store_still_embeds_reused_pages() -> None:
     embedded = _run_level(store)
     assert "fresh.py" in embedded
     assert "reused.py" in embedded
+
+
+class _DeferredStore(_RecordingStore):
+    """Store that lands rows without embedding, like LanceDB/InMemory now do."""
+
+    def __init__(self, *, persists: bool) -> None:
+        super().__init__(persists=persists)
+        self.text_batches: list[list[tuple]] = []
+
+    async def upsert_page_texts(self, items):
+        self.text_batches.append(list(items))
+        return True
+
+
+def test_deferring_store_lands_rows_but_never_embeds_in_level() -> None:
+    """With a deferred write, the level writes rows and queues the embed."""
+    store = _DeferredStore(persists=True)
+
+    async def _go():
+        async def fresh():
+            return _page("fresh.py")
+
+        async def reused():
+            return _page("reused.py", reused=True)
+
+        run = _fake_run(store)
+        run.deferred_embed_items = []
+        await _GenerationRun.run_level(run, [("p1", fresh()), ("p2", reused())], level=2)
+        return run
+
+    run = asyncio.run(_go())
+    landed = [pid for batch in store.text_batches for (pid, *_rest) in batch]
+    assert landed == ["fresh.py"]  # reuse gating applies to the row write too
+    assert store.batches == []  # no embed during the level
+    assert [pid for (pid, *_rest) in run.deferred_embed_items] == ["fresh.py"]
+
+
+def test_flush_deferred_embeddings_embeds_queued_items_once() -> None:
+    store = _DeferredStore(persists=True)
+
+    async def _go():
+        run = _fake_run(store)
+        run.deferred_embed_items = [("fresh.py", "# fresh.py", {"target_path": "fresh.py"})]
+        await _GenerationRun._flush_deferred_embeddings(run)
+        return run
+
+    asyncio.run(_go())
+    assert [[pid for (pid, *_rest) in batch] for batch in store.batches] == [["fresh.py"]]

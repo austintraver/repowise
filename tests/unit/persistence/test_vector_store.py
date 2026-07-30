@@ -498,3 +498,144 @@ async def test_lancedb_embed_batch_honors_configured_batch_size(tmp_path):
         assert len(await store.list_page_ids()) == 3
     finally:
         await store.close()
+
+
+# ---------------------------------------------------------------------------
+# upsert_page_texts (deferred embedding: rows land without an embedder call)
+# ---------------------------------------------------------------------------
+
+
+class _ForbiddenEmbedder:
+    """Embedder whose embed() must never run — proves a write path is embedder-free."""
+
+    dimensions: int = 8
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        raise AssertionError("embed() was called on a path that must not embed")
+
+
+async def test_base_upsert_page_texts_defaults_to_false():
+    """A backend without the deferred write reports False so callers embed."""
+    from repowise.core.persistence.vector_store import VectorStore
+
+    class _MinimalStore(VectorStore):
+        async def embed_and_upsert(self, page_id, text, metadata):
+            return None
+
+        async def search(self, query, limit=10):
+            return []
+
+        async def delete(self, page_id):
+            return None
+
+        async def close(self):
+            return None
+
+    assert await _MinimalStore().upsert_page_texts([("p1", "text", {})]) is False
+
+
+async def test_in_memory_upsert_page_texts_round_trip():
+    from repowise.core.persistence.vector_store import InMemoryVectorStore
+
+    store = InMemoryVectorStore(embedder=_ForbiddenEmbedder())
+    landed = await store.upsert_page_texts(
+        [
+            (
+                "p1",
+                "full page text",
+                {"target_path": "a.py", "summary": "summary of a", "content": "full page text"},
+            )
+        ]
+    )
+    assert landed is True
+    assert await store.list_page_ids() == {"p1"}
+    out = await store.get_page_summaries_by_paths(["a.py"])
+    assert out["a.py"]["summary"] == "summary of a"
+
+
+@pytest.mark.asyncio
+async def test_lancedb_upsert_page_texts_round_trip_without_embedder(tmp_path):
+    """Rows land embedder-free and read back byte-identically.
+
+    ``content_snippet`` is the one field generation's cross-level dependency
+    lookup consumes; it must be exactly what the embedding write would have
+    stored: the first 200 chars of the metadata ``content``.
+    """
+    pytest.importorskip("lancedb")
+    from repowise.core.persistence.vector_store import LanceDBVectorStore
+
+    store = LanceDBVectorStore(str(tmp_path / "lance"), _ForbiddenEmbedder())
+    text = "x" * 500
+    try:
+        landed = await store.upsert_page_texts(
+            [("p1", text, {"title": "T", "target_path": "a.py", "content": text[:600]})]
+        )
+        assert landed is True
+        assert await store.list_page_ids() == {"p1"}
+        out = await store.get_page_summaries_by_paths(["a.py"])
+        assert out["a.py"]["summary"] == text[:200]
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_lancedb_embed_batch_after_deferred_write_keeps_snippet(tmp_path, mock_embedder):
+    """The end-of-run embed over the same items replaces only the vector."""
+    pytest.importorskip("lancedb")
+    from repowise.core.persistence.vector_store import LanceDBVectorStore
+
+    items = [
+        ("p1", "alpha content", {"title": "A", "target_path": "a.py", "content": "alpha content"}),
+        ("p2", "beta content", {"title": "B", "target_path": "b.py", "content": "beta content"}),
+    ]
+    store = LanceDBVectorStore(str(tmp_path / "lance"), mock_embedder)
+    try:
+        await store.upsert_page_texts(items)
+        before = await store.get_page_summaries_by_paths(["a.py", "b.py"])
+        await store.embed_batch(items)
+        after = await store.get_page_summaries_by_paths(["a.py", "b.py"])
+        assert before == after
+        assert await store.list_page_ids() == {"p1", "p2"}
+        # Real vectors landed: the mock embedder now finds a nearest page.
+        results = await store.search("alpha content", limit=1)
+        assert len(results) == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_lancedb_upsert_page_texts_never_drops_existing_table(tmp_path, mock_embedder):
+    """A deferred text write must not trigger the dimension-change rebuild.
+
+    The table's width belongs to whichever embedder built it; only a real
+    embedding write may rebuild the table (`_ensure_table`'s drop). A text
+    write sized off a *different* configured embedder would otherwise clobber
+    every existing row, the failure `_mock_would_clobber` exists to prevent.
+    """
+    pytest.importorskip("lancedb")
+    from repowise.core.persistence.vector_store import LanceDBVectorStore
+
+    db_path = str(tmp_path / "lance")
+
+    # Existing table built by the 8-dim mock embedder.
+    store = LanceDBVectorStore(db_path, mock_embedder)
+    try:
+        await store.embed_and_upsert(
+            "old", "old content", {"target_path": "old.py", "content": "old content"}
+        )
+    finally:
+        await store.close()
+
+    # A store configured with a much wider embedder defers a text write.
+    store = LanceDBVectorStore(db_path, _FixedDimEmbedder(1536))
+    try:
+        await store.upsert_page_texts(
+            [("new", "new content", {"target_path": "new.py", "content": "new content"})]
+        )
+        # Both rows survive: the placeholder matched the table's own width.
+        assert await store.list_page_ids() == {"old", "new"}
+        out = await store.get_page_summaries_by_paths(["old.py", "new.py"])
+        assert out["old.py"]["summary"] == "old content"
+        assert out["new.py"]["summary"] == "new content"
+    finally:
+        await store.close()

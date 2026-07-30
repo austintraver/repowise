@@ -151,6 +151,11 @@ class _GenerationRun:
         self.semaphore = asyncio.Semaphore(self.config.max_concurrency)
         self.completed_page_summaries: dict[str, str] = {}
         self.completed_ids: set[str] = set()
+        # Embed items whose summary rows already landed via the store's
+        # deferred text write; their vectors are written in one batch after
+        # the last level, so the embedding model is never resident between
+        # generation calls.
+        self.deferred_embed_items: list[tuple[str, str, dict]] = []
         self.job_id: str | None = None
         self.file_page_contexts: dict[str, FilePageContext] = {}
 
@@ -562,10 +567,17 @@ class _GenerationRun:
         if self.job_system is not None and self.job_id is not None:
             self.job_system.update_level(self.job_id, level)
 
-        # Pages finished during this level, collected for a single batched
-        # embed at the end. Embedding the whole wave in one call amortises the
-        # embedder round-trip and the level drains before the next level's RAG
-        # search runs, so there is no freshness regression.
+        # Pages finished during this level, collected for one batched
+        # summary-row write when the level drains. The next level's dependency
+        # prefetch and a later run's resume seeding read these rows, so they
+        # must land before the level is declared done — but only the row is
+        # load-bearing (``content_snippet`` is a prefix of the page's own
+        # text); generation never reads the vector. Stores that can persist
+        # the row without embedding defer the vector write to one end-of-run
+        # batch, so the embedding model is never resident between generation
+        # calls (on a one-model-at-a-time Ollama host, embedding between
+        # levels evicted the generation model and cost a full reload per
+        # level).
         embed_items: list[tuple[str, str, dict]] = []
 
         async def guarded_named(page_id: str, coro: Any) -> Any:
@@ -647,23 +659,49 @@ class _GenerationRun:
 
         tasks = [guarded_named(pid, c) for pid, c in named_coros]
         results = await asyncio.gather(*tasks)
-        # Embed the whole level in one batch before declaring it done — the
-        # next level's RAG search depends on these landing in the store.
-        # Embedding is a RAG enhancement, not load-bearing, so a failure must
-        # not abort generation — but it MUST be visible: a debug-level
-        # swallow here hid a 300k-token request rejection that silently lost
-        # every file-page embedding on init (`repowise reindex` repairs).
+        # Land the whole level's summary rows in one batch before declaring
+        # it done — the next level's dependency prefetch reads them from the
+        # store. A failure must not abort generation — but it MUST be
+        # visible: a debug-level swallow here hid a 300k-token request
+        # rejection that silently lost every file-page embedding on init
+        # (`repowise reindex` repairs).
         if embed_items and self.vector_store is not None:
+            # getattr rather than a direct call: stores are duck-typed here
+            # (see the coordinator's list_page_ids guard), and one without
+            # the deferred write keeps the historical per-level embed.
+            deferred_write = getattr(self.vector_store, "upsert_page_texts", None)
+            rows_deferred = False
             try:
-                await self.vector_store.embed_batch(embed_items)
+                if deferred_write is not None:
+                    rows_deferred = await deferred_write(embed_items)
             except Exception as e:
+                # Rows missed this level, so the next level may generate
+                # without this level's dependency snippets. The end-of-run
+                # flush writes full rows for the same items, so queueing them
+                # anyway doubles as the retry.
+                rows_deferred = True
                 log.warning(
-                    "rag.embed_batch_failed",
+                    "rag.upsert_page_texts_failed",
                     level=level,
                     count=len(embed_items),
                     error=str(e),
-                    hint="semantic search will miss these pages; run `repowise reindex` to repair",
+                    hint="next level may miss these dependency summaries; the end-of-run embed retries them",
                 )
+            if rows_deferred:
+                self.deferred_embed_items.extend(embed_items)
+            else:
+                # The store cannot persist a row without its vector — embed
+                # now, the historical per-level behaviour.
+                try:
+                    await self.vector_store.embed_batch(embed_items)
+                except Exception as e:
+                    log.warning(
+                        "rag.embed_batch_failed",
+                        level=level,
+                        count=len(embed_items),
+                        error=str(e),
+                        hint="semantic search will miss these pages; run `repowise reindex` to repair",
+                    )
         pages = [r for r in results if isinstance(r, GeneratedPage)]
         if self.job_system is not None and self.job_id is not None:
             for r in pages:
@@ -672,6 +710,28 @@ class _GenerationRun:
                 if r.metadata.get(STUB_FALLBACK_ERROR) is None:
                     self.job_system.complete_page(self.job_id, r.page_id)
         return pages
+
+    async def _flush_deferred_embeddings(self) -> None:
+        """Embed every deferred summary row in one batch after the last level.
+
+        Runs once no generation call remains, so loading the embedding model
+        here can no longer evict a generation model anything is waiting on.
+        The rows themselves already landed level by level; what a failure
+        here loses is semantic search over this run's pages, and it stays
+        visible for the same reason the per-level write does.
+        """
+        if not self.deferred_embed_items or self.vector_store is None:
+            return
+        try:
+            await self.vector_store.embed_batch(self.deferred_embed_items)
+        except Exception as e:
+            log.warning(
+                "rag.embed_batch_failed",
+                level="end_of_run",
+                count=len(self.deferred_embed_items),
+                error=str(e),
+                hint="semantic search will miss these pages; run `repowise reindex` to repair",
+            )
 
     # ------------------------------------------------------------------
     # Orchestration
@@ -700,6 +760,7 @@ class _GenerationRun:
         # would rewrite a whole-repo page from a one-commit view. They stay as
         # the last full run left them.
         if getattr(self.config, "file_pages_only", False):
+            await self._flush_deferred_embeddings()
             return self._finalize(all_pages)
 
         # Level 3 (scc_page).
@@ -736,6 +797,7 @@ class _GenerationRun:
                         page.metadata["layer_order_ids"] = self.layer_order_ids
                     break
 
+        await self._flush_deferred_embeddings()
         return self._finalize(all_pages)
 
     def _finalize(self, all_pages: list[GeneratedPage]) -> list[GeneratedPage]:
