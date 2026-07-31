@@ -77,6 +77,7 @@ You can edit this file directly. Changes take effect on the next `init`,
 | `embedding_model` | provider default | Embedding model identifier |
 | `reasoning` | `auto` | `auto`, `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `max_tokens` | `16384` | Maximum output tokens requested for each model-written documentation page |
+| `frozen_outline` | unset | Path (relative to the repo root) of a `concept-naming.json` a prior run wrote next to its wiki. When set, module-page titles, scopes, sections and reading order replay from that map instead of being named by the model, so every run writes its concept pages under identical instructions. Replay is strict: a concept group the map does not cover fails the run |
 | `commit_limit` | `500` | Max commits per file walked for git analysis, clamped to 1-10000 |
 | `follow_renames` | `false` | Track file renames through git history |
 | `exclude_patterns` | `[]` | Extra gitignore-style patterns, on top of `.gitignore` |
