@@ -11,8 +11,10 @@ tokens and is theme-aware, so a hardcoded fill here would break in dark mode.
 Boundary layers in a layer diagram are distinguished by node *shape*, not color.
 
 ``build_overview_mermaid`` / ``build_layer_mermaid`` return ``None`` when the KG
-lacks the data to draw a useful diagram (older or uncurated indexes), so callers
-fall back cleanly to prior behavior.
+lacks the data to draw a useful diagram (older or uncurated indexes — and, for
+the overview, when no inter-module dependency clears the edge floor, because an
+arrowless overview is not an architecture map), so callers fall back cleanly to
+prior behavior.
 """
 
 from __future__ import annotations
@@ -111,23 +113,51 @@ class ArchitectureMermaidBuilder:
         if not self._ok or not self._layers:
             return None
 
+        # Anatomy first: the largest modules of each layer earn a node.
         selected: dict[str, dict] = {}
-        layer_nodes: dict[str, list[str]] = {}
         for ly in self._layers:
-            mods = self._modules_by_layer.get(ly["id"], [])[:_OVERVIEW_MODULES_PER_LAYER]
-            layer_nodes[ly["id"]] = [m["id"] for m in mods]
-            for m in mods:
+            for m in self._modules_by_layer.get(ly["id"], [])[:_OVERVIEW_MODULES_PER_LAYER]:
                 selected[m["id"]] = m
         if not selected:
             return None
 
-        kept = [
-            (ms, mt, c)
-            for (ms, mt), c in self._mod_edges.items()
-            if ms in selected and mt in selected and c >= _OVERVIEW_MIN_EDGE
-        ]
-        kept.sort(key=lambda x: x[2], reverse=True)
-        kept = kept[:_OVERVIEW_MAX_EDGES]
+        # The arrows are the architecture content, and the size cut above
+        # knows nothing about coupling: on real corpora the strongest
+        # dependencies can sit entirely on modules one rank below the size
+        # cut, which used to ship a nodes-only "architecture" map. So each
+        # kept edge also pulls its endpoint modules into the map, drawn
+        # inside their own layer's subgraph. The additions stay bounded by
+        # the existing edge cap: at most two modules per kept edge.
+        drawn_layers = {ly["id"] for ly in self._layers}
+        strong = [(ms, mt, c) for (ms, mt), c in self._mod_edges.items() if c >= _OVERVIEW_MIN_EDGE]
+        strong.sort(key=lambda x: x[2], reverse=True)
+        kept: list[tuple[str, str, int]] = []
+        for ms, mt, c in strong:
+            if len(kept) >= _OVERVIEW_MAX_EDGES:
+                break
+            src, dst = self._mod_by_id.get(ms), self._mod_by_id.get(mt)
+            if any(
+                m is None or (m["id"] not in selected and m.get("layerId") not in drawn_layers)
+                for m in (src, dst)
+            ):
+                continue  # an endpoint has no drawable layer to live in
+            selected.setdefault(ms, src)  # type: ignore[arg-type]
+            selected.setdefault(mt, dst)  # type: ignore[arg-type]
+            kept.append((ms, mt, c))
+
+        if not kept:
+            # Boxes without a single dependency arrow are not an architecture
+            # map. Per the module contract, None lets the caller fall back to
+            # the LLM's own diagram instead of shipping an edgeless one.
+            return None
+
+        # Size order within each subgraph, pulled-in modules in their rank.
+        layer_nodes: dict[str, list[str]] = {
+            ly["id"]: [
+                m["id"] for m in self._modules_by_layer.get(ly["id"], []) if m["id"] in selected
+            ]
+            for ly in self._layers
+        }
 
         lines = ["flowchart LR"]
         for ly in self._layers:
