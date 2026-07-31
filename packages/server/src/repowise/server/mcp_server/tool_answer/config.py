@@ -3,7 +3,10 @@
 All of get_answer's knobs live here so the retrieval / synthesis / confidence
 modules read like policy applied to data, and the data is tunable in one place.
 None of these are repo-specific — they are properties of BM25-style retrieval
-with a coverage re-ranker, not of any particular codebase.
+with a coverage re-ranker, not of any particular codebase. The two values a
+deployment may size for itself (the page-excerpt size and the synthesis
+budget) are resolved per repo in ``dials.py``, with the constants here as
+their defaults.
 """
 
 from __future__ import annotations
@@ -461,13 +464,14 @@ _STOPWORDS = frozenset(
 # gets truncated; the agent can call get_symbol for the full body.
 _MAX_RICH_SIG_LINES = 4
 
-# Synthesis sampling. Answers target 150-400 words (~550 tokens), so the cap is
-# headroom rather than the binding constraint; generation speed is. Temperature
-# is low because the answer must track the retrieved excerpts, not embellish.
+# Synthesis sampling. Answers target 150-400 words (~550 tokens) at the
+# default budget, so the cap is headroom rather than the binding constraint;
+# generation speed is. Temperature is low because the answer must track the
+# retrieved excerpts, not embellish.
 _SYNTHESIS_MAX_TOKENS = 1024
 _SYNTHESIS_TEMPERATURE = 0.2
 
-_SYSTEM_PROMPT = (
+_SYSTEM_PROMPT_TEMPLATE = (
     "You are a code-aware retrieval assistant. You are given a developer "
     "question plus excerpts from a project wiki — file summaries, symbol "
     "signatures with docstrings, and (for symbols whose name matches the "
@@ -476,12 +480,12 @@ _SYSTEM_PROMPT = (
     "and line numbers when you have them. Prefer a structured answer "
     "(headings / bullets / short code block citing the symbol) over a "
     "paragraph when the question asks about mechanism or architecture. "
-    "Aim for 150–400 words — enough to cover the asked aspects without "
-    "padding. If a [question-match] symbol's source body is provided, "
-    "you have enough material to answer — ground in that body. Only "
-    "hedge (say 'inspect the source' / 'the excerpts do not contain…') "
-    "when there is genuinely no relevant signature, docstring, or source "
-    "body in the excerpts. Never invent file paths."
+    "Aim for {words_low}–{words_high} words — enough to cover the asked "
+    "aspects without padding. If a [question-match] symbol's source body "
+    "is provided, you have enough material to answer — ground in that "
+    "body. Only hedge (say 'inspect the source' / 'the excerpts do not "
+    "contain…') when there is genuinely no relevant signature, docstring, "
+    "or source body in the excerpts. Never invent file paths."
 )
 
 _USER_TEMPLATE = """\
@@ -491,9 +495,9 @@ Project wiki excerpts (top {n} retrieval hits):
 
 {context}
 
-Answer thoroughly (150–400 words). Cite file paths inline and line
-numbers when the excerpt provides them. Prefer a structured layout
-(headings, bullets, short code block from the source body) on
-mechanism / architecture questions. Only hedge if no signature,
+Answer thoroughly ({words_low}–{words_high} words). Cite file paths
+inline and line numbers when the excerpt provides them. Prefer a
+structured layout (headings, bullets, short code block from the source
+body) on mechanism / architecture questions. Only hedge if no signature,
 docstring, or source body in the excerpts is relevant.
 """

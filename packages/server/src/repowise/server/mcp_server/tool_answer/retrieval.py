@@ -21,13 +21,13 @@ from repowise.server.mcp_server.tool_answer.config import (
     _BACKEND_QUESTION_TOKENS,
     _COVERAGE_FLOOR,
     _DOMAIN_PENALTY,
-    _GATED_EXCERPT_CHARS,
     _PAGE_EXCERPT_HITS,
     _RELATIONAL_CONNECTIVES,
     _STOPWORDS,
     _UI_PATH_PREFIXES,
     _UI_QUESTION_TOKENS,
 )
+from repowise.server.mcp_server.tool_answer.dials import answer_excerpt_chars
 
 _log = logging.getLogger("repowise.mcp.answer")
 
@@ -189,11 +189,12 @@ async def _attach_page_excerpts(hits: list[dict], ctx: Any = None) -> int:
             exc_info=True,
         )
         return len(top)
+    excerpt_cap = answer_excerpt_chars(getattr(ctx, "path", None))
     missing = 0
     for h in top:
         body = content_by_id.get(h.get("page_id"), "")
         if body:
-            h["excerpt"] = body[:_GATED_EXCERPT_CHARS]
+            h["excerpt"] = body[:excerpt_cap]
         else:
             missing += 1
     return missing

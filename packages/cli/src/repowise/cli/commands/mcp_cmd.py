@@ -11,6 +11,29 @@ from repowise.cli.ui import load_dotenv
 from repowise.core.workspace.config import WorkspaceConfig, find_workspace_root
 
 
+def _route_logging_to_stderr() -> None:
+    """Point structlog and stdlib logging at stderr for stdio transport.
+
+    ``cache_logger_on_first_use=False`` is load-bearing for the same reason
+    as in ``configure_cli_logging``: modules that called
+    ``structlog.get_logger`` at import time otherwise keep a stdout-bound
+    logger snapshotted before this runs.
+    """
+    import logging
+    import sys
+
+    logging.basicConfig(stream=sys.stderr, force=True)
+    try:
+        import structlog
+
+        structlog.configure(
+            logger_factory=structlog.PrintLoggerFactory(sys.stderr),
+            cache_logger_on_first_use=False,
+        )
+    except ImportError:
+        pass
+
+
 def _workspace_summary(path: Path) -> dict[str, object] | None:
     workspace_root = find_workspace_root(path)
     if workspace_root is None:
@@ -148,8 +171,14 @@ def mcp_command(
     if transport in {"sse", "streamable-http"}:
         _print_network_startup(transport, repo_path, port, workspace)
     else:
-        # stdio mode — no console output (it would corrupt the protocol)
-        pass
+        # stdio mode — stdout IS the protocol, and skipping the banner is not
+        # enough: structlog's default printer and stdlib logging both write to
+        # stdout, and a single debug line interleaved with a JSON-RPC frame
+        # aborts the client with a parse error (observed live:
+        # `ollama.generate.start` emitted during get_answer synthesis). Route
+        # every log to stderr before serving; levels stay untouched so the
+        # lines remain visible where the client records server stderr.
+        _route_logging_to_stderr()
 
     from repowise.server.mcp_server import run_mcp
 

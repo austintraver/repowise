@@ -125,10 +125,20 @@ async def test_a_hit_without_page_content_still_formats(setup_mcp, factory, monk
     assert "One-line summary of the page." in prompts[0]
 
 
-def test_format_excerpt_cap_is_at_least_the_fetch_size():
-    """Guard the relationship directly, so an edit to either constant fails
-    here rather than silently halving the prompt."""
-    from repowise.server.mcp_server._answer_context import _MAX_CHARS_PER_HIT_EXCERPT
-    from repowise.server.mcp_server.tool_answer.config import _GATED_EXCERPT_CHARS
+@pytest.mark.asyncio
+async def test_raised_excerpt_dial_reaches_the_prompt_whole(setup_mcp, factory, monkeypatch):
+    """The fetch and the formatter read one resolved dial, so raising it must
+    deliver the whole larger excerpt — not fetch large and format small."""
+    import repowise.server.mcp_server.tool_answer.answer as answer_mod
+    from repowise.server.mcp_server import get_answer
 
-    assert _MAX_CHARS_PER_HIT_EXCERPT >= _GATED_EXCERPT_CHARS
+    monkeypatch.setenv("REPOWISE_ANSWER_EXCERPT_CHARS", "4000")
+    body = "abcdefghij" * 450  # 4500 chars — past the raised dial
+    await _add_pages(factory, setup_mcp, body)
+    _patch_pipeline(monkeypatch, answer_mod, _PAGE_IDS[0])
+    prompts = _capture_prompt(monkeypatch, answer_mod, "Alpha writes (pkg/alpha/one.py).")
+
+    await get_answer("how does the alpha module handle the write path")
+
+    assert prompts, "synthesis must run"
+    assert body[:4000] in prompts[0], "the whole 4000-char excerpt must reach the prompt"
