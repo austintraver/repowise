@@ -59,6 +59,7 @@ def _fake_run(store) -> SimpleNamespace:
         on_page_ready=None,
         vector_store=store,
         completed_page_summaries={},
+        config=SimpleNamespace(dependency_summary_chars=200),
     )
 
 

@@ -78,18 +78,20 @@ def _extract_summary(content: str, max_chars: int = 320, skip_metadata: bool = F
     return cut.rstrip() + "…"
 
 
-def overview_summary(content: str) -> str:
+def overview_summary(content: str, max_chars: int = 400) -> str:
     """Return a dependency-context blurb favouring the ## Overview section.
 
     Distinct from :func:`_extract_summary`: this is the summary fed into
     downstream pages' dependency context and into the vector-store embed
     payload, where the ## Overview lead sentence is the most useful anchor.
+    ``max_chars`` scales with ``GenerationConfig.dependency_summary_chars``;
+    the section scan window stays 4x the cap so the blurb can always fill it.
     """
     if "## Overview" in content:
         start = content.index("## Overview") + len("## Overview")
         end = content.find("\n##", start)
-        return content[start : end if end > 0 else start + 1600].strip()[:400]
-    return content[:400]
+        return content[start : end if end > 0 else start + 4 * max_chars].strip()[:max_chars]
+    return content[:max_chars]
 
 
 _EMPTY_DUPLICATE_HEADING = re.compile(
@@ -219,9 +221,7 @@ def _select_clone_representatives(
         # Near-clones usually share a PageRank (often 0.0), so the path breaks
         # the tie. Without it the survivor of each cluster changes between
         # runs, and with it which file gets a page at all.
-        members.sort(
-            key=lambda p: (-pagerank.get(p.file_info.path, 0.0), p.file_info.path)
-        )
+        members.sort(key=lambda p: (-pagerank.get(p.file_info.path, 0.0), p.file_info.path))
         for loser in members[1:]:
             drop.add(loser.file_info.path)
     return drop

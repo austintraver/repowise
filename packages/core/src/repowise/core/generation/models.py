@@ -68,6 +68,10 @@ class GenerationConfig:
         max_tokens:               Max tokens in LLM completion.
         temperature:              Sampling temperature (0.3 for consistent docs).
         token_budget:             Context tokens fed to LLM (not output).
+        dependency_summary_chars: Chars of a dependency page's summary injected
+                                  into pages that depend on it. The stored
+                                  ``content_snippet`` and the in-run summary
+                                  reservoirs derive from it at fixed ratios.
         max_concurrency:          asyncio.Semaphore size for parallel calls.
         embed_concurrency:        asyncio.Semaphore size for vector-store writes.
                                   Defaults to max_concurrency.
@@ -82,6 +86,7 @@ class GenerationConfig:
     max_tokens: int = DEFAULT_MAX_TOKENS
     temperature: float = 0.3
     token_budget: int = 48000
+    dependency_summary_chars: int = 200
     max_concurrency: int = 12
     embed_concurrency: int | None = None
     reasoning: ReasoningMode = "auto"
@@ -231,6 +236,18 @@ class GenerationConfig:
             raise ValueError("max_tokens must be a positive integer")
 
         values = {"max_tokens": max_tokens, **overrides}
+        for key in ("token_budget", "dependency_summary_chars"):
+            if key in overrides or key not in config:
+                continue
+            raw = config[key]
+            if isinstance(raw, bool) or not (
+                isinstance(raw, int) or (isinstance(raw, str) and raw.strip().isdigit())
+            ):
+                raise ValueError(f"{key} must be a positive integer")
+            parsed = int(raw)
+            if parsed <= 0:
+                raise ValueError(f"{key} must be a positive integer")
+            values[key] = parsed
         return cls(**values)
 
     def __post_init__(self) -> None:
