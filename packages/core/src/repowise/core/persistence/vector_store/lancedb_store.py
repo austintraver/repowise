@@ -224,6 +224,38 @@ class LanceDBVectorStore(VectorStore):
                 f"embed_batch: {failed}/{len(items)} items failed to embed"
             ) from last_exc
 
+    async def upsert_page_texts(self, items: list[tuple[str, str, dict]]) -> bool:
+        """Persist page rows with a zero placeholder vector, no embedder call.
+
+        The placeholder is sized to the existing table's vector width, so this
+        write can never trigger the dimension-mismatch drop in
+        :meth:`_ensure_table` — only a real embedding write is allowed to
+        rebuild the table. Without a table yet, the width comes from the
+        configured embedder's ``dimensions`` (a static config fact for every
+        adapter; reading it loads nothing).
+
+        A zero vector means "row landed, not yet embedded". The end-of-run
+        :meth:`embed_batch` over the same items (or ``repowise reindex``)
+        replaces it; until then the row is fully readable by the path-keyed
+        summary lookups and ``list_page_ids``.
+        """
+        if not items:
+            return True
+        await self._ensure_connected()
+        dim: int | None = None
+        if self._table is not None:
+            dim = self._existing_vector_dim(await self._table.schema())
+        if dim is None:
+            dim = self._embedder.dimensions
+        placeholder = [0.0] * dim
+        await self._ensure_table(placeholder)
+        rows = [
+            self._row(page_id, placeholder, {"content": text, **metadata})
+            for page_id, text, metadata in items
+        ]
+        await self._upsert_rows(rows)
+        return True
+
     async def _search_by_vector(
         self, q_vec: list[float], limit: int, query: str | None = None
     ) -> list[SearchResult]:
