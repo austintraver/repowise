@@ -194,6 +194,15 @@ class GenerationConfig:
     # each page's source_hash, so `repowise update` regenerates affected pages in
     # the new style. See generation/styles/ and WIKI_STYLES_PLAN.md.
     wiki_style: str = "comprehensive"
+    # Path to a persisted concept-naming map (a ``concept-naming.json`` a
+    # prior run wrote next to its wiki). When set, module-page titles,
+    # scopes, sections and reading order replay from the map instead of
+    # being named by the model, holding every concept page's instructions
+    # constant across runs — the control a model comparison needs. Relative
+    # paths resolve against the repository root. Replay is strict: a group
+    # the map does not cover fails the run rather than silently un-freezing
+    # the experiment. See page_generator/outline_freeze.py.
+    frozen_outline: str | None = None
     # ---- Prose on the synthesis pages ---------------------------------
     # When True, the page types whose value is synthesis (module_page,
     # repo_overview, architecture_diagram, onboarding) render a thin
@@ -277,6 +286,12 @@ class GenerationConfig:
             if parsed <= 0:
                 raise ValueError(f"{key} must be a positive integer")
             values[key] = parsed
+        if "frozen_outline" not in overrides:
+            raw_frozen = config.get("frozen_outline")
+            if raw_frozen is not None:
+                if not isinstance(raw_frozen, str) or not raw_frozen.strip():
+                    raise ValueError("frozen_outline must be a non-empty path string")
+                values["frozen_outline"] = raw_frozen.strip()
         return cls(**values)
 
     def __post_init__(self) -> None:

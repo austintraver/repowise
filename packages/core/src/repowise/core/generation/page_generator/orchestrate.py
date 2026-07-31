@@ -323,11 +323,15 @@ class _GenerationRun:
         Every failure mode degrades to those deterministic titles rather than
         failing the run: no provider, deterministic mode, a provider that
         raises, a response that will not parse, or a group the model left out.
+        The one exception is ``config.frozen_outline``, which replays a prior
+        run's persisted naming instead of calling the model and fails loudly
+        on drift — see ``outline_freeze`` for why the strictness inverts.
         """
         groups = list(getattr(self.selection, "concept_groups", None) or [])
         deterministic = bool(getattr(self.config, "deterministic", False))
         provider = getattr(self.gen, "_provider", None)
-        if not groups or deterministic or provider is None:
+        frozen_source = getattr(self.config, "frozen_outline", None)
+        if not groups or deterministic or (provider is None and not frozen_source):
             return
 
         # Naming is only worth a call if this run is going to write a concept
@@ -342,6 +346,10 @@ class _GenerationRun:
         if not any(
             self._emit(compute_page_id("module_page", mg.key)) for mg in self.sel_module_groups
         ):
+            return
+
+        if frozen_source:
+            self._apply_frozen_outline(str(frozen_source))
             return
 
         from ..concept_tree.planner import PlannerInputs, name_groups
@@ -426,6 +434,43 @@ class _GenerationRun:
             duplicate_titles=len(report.duplicate_titles),
             invented=len(report.invented_paths),
         )
+        self._persist_concept_naming(outline.naming_mode)
+
+    def _apply_frozen_outline(self, source: str) -> None:
+        """Replay a persisted naming map instead of asking the model."""
+        from .outline_freeze import apply_frozen_naming, load_frozen_naming
+
+        map_path = Path(source)
+        if not map_path.is_absolute() and self.repo_path:
+            map_path = Path(self.repo_path) / source
+        frozen = load_frozen_naming(map_path)
+        self.sel_module_groups = apply_frozen_naming(self.sel_module_groups, frozen)
+        log.info(
+            "concept_naming.frozen",
+            source=str(map_path),
+            groups=len(self.sel_module_groups),
+        )
+        self._persist_concept_naming("frozen")
+
+    def _persist_concept_naming(self, naming_mode: str) -> None:
+        """Record the effective naming so any run can donate it to a freeze.
+
+        Written next to the wiki so it travels with copied state directories.
+        A write failure downgrades the run's donor eligibility, not the run.
+        """
+        if not self.repo_path:
+            return
+        from .outline_freeze import NAMING_ARTIFACT_NAME, naming_payload, write_concept_naming
+
+        target = Path(self.repo_path) / ".repowise" / NAMING_ARTIFACT_NAME
+        model_name = getattr(getattr(self.gen, "_provider", None), "model_name", None)
+        try:
+            write_concept_naming(
+                target,
+                naming_payload(self.sel_module_groups, naming_mode, model_name),
+            )
+        except OSError as exc:
+            log.warning("concept_naming.persist_failed", target=str(target), error=str(exc))
 
     def _announce_total(self) -> None:
         # A scoped run emits exactly the requested-and-not-yet-done ids, so the
