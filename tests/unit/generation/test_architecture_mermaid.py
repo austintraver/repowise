@@ -104,6 +104,98 @@ class TestOverview:
         assert "classDef" not in ov and "style " not in ov
 
 
+def _kg_strong_edge_below_size_cut() -> dict:
+    """Synthetic KG shaped like the corpus that shipped an edgeless overview.
+
+    Layer ``app`` holds two large uncoupled modules (``big-a``, ``big-b``) and a
+    smaller ``coupled`` module (size rank 3, below the per-layer cut of 2) that
+    carries the only strong dependency: 15 imports into ``svc``'s ``service``.
+    A size-only node cut selects big-a/big-b/service and can then draw no edge.
+    """
+
+    def files(mod: str, n: int) -> list[str]:
+        return [f"{mod}/f{i}.py" for i in range(n)]
+
+    big_a, big_b = files("app/big-a", 20), files("app/big-b", 18)
+    coupled, service = files("app/coupled", 12), files("svc/service", 15)
+    all_files = big_a + big_b + coupled + service
+    nodes = [{"id": f"file:{f}", "type": "file", "filePath": f} for f in all_files]
+    edges = [
+        {"source": f"file:{s}", "target": f"file:{t}", "type": "imports"}
+        for s, t in zip(coupled, service[: len(coupled)], strict=True)
+    ] + [
+        {"source": f"file:{s}", "target": f"file:{t}", "type": "imports"}
+        for s, t in zip(coupled[:3], service[3:6], strict=True)
+    ]  # 12 + 3 = 15 imports coupled -> service, nothing else cross-module
+
+    def module(mid: str, path: str, layer: str, file_list: list[str]) -> dict:
+        return {
+            "id": f"module:{mid}",
+            "name": path,
+            "path": path,
+            "layerId": f"layer:{layer}",
+            "nodeIds": [f"file:{f}" for f in file_list],
+        }
+
+    return {
+        "project": {"name": "t"},
+        "nodes": nodes,
+        "edges": edges,
+        "layers": [
+            {
+                "id": "layer:app",
+                "name": "App",
+                "description": "",
+                "nodeIds": [f"file:{f}" for f in big_a + big_b + coupled],
+            },
+            {
+                "id": "layer:svc",
+                "name": "Svc",
+                "description": "",
+                "nodeIds": [f"file:{f}" for f in service],
+            },
+        ],
+        "modules": [
+            module("big-a", "app/big-a", "app", big_a),
+            module("big-b", "app/big-b", "app", big_b),
+            module("coupled", "app/coupled", "app", coupled),
+            module("service", "svc/service", "svc", service),
+        ],
+    }
+
+
+class TestOverviewEdgeNodeCoherence:
+    """The node cut must never silently starve the edge cut (edgeless hero)."""
+
+    def test_strong_edge_endpoint_below_size_cut_is_pulled_in(self):
+        ov = build_overview_mermaid(_ctx(_kg_strong_edge_below_size_cut()))
+        assert ov is not None
+        # the dependency the map exists to show is drawn...
+        assert '|"15"|' in ov
+        assert ov.count("-->") == 1
+        # ...its below-the-cut endpoint becomes a node, inside its own layer
+        app_subgraph = ov.split("subgraph layer_app")[1].split("end")[0]
+        assert "app/coupled" in app_subgraph
+        # and the size-selected anatomy is still there
+        assert "app/big-a" in ov and "app/big-b" in ov and "svc/service" in ov
+
+    def test_pulled_in_output_stays_theme_safe(self):
+        ov = build_overview_mermaid(_ctx(_kg_strong_edge_below_size_cut()))
+        assert "#" not in ov
+        assert "classDef" not in ov and "style " not in ov
+
+    def test_overview_with_no_strong_edges_returns_none(self):
+        kg = _kg_strong_edge_below_size_cut()
+        # keep only 3 of the 15 imports: below the overview floor
+        kg["edges"] = kg["edges"][:3]
+        assert build_overview_mermaid(_ctx(kg)) is None
+
+    def test_overview_with_no_edges_at_all_returns_none(self):
+        kg = _kg_strong_edge_below_size_cut()
+        kg["edges"] = []
+        assert build_overview_mermaid(_ctx(kg)) is None
+
+
 class TestLayer:
     def test_shape_modules_and_intra_edges(self):
         c = _ctx()
