@@ -80,6 +80,8 @@ You can edit this file directly. Changes take effect on the next `init`,
 | `reasoning` | `auto` | `auto`, `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `max_tokens` | `16384` | Maximum output tokens requested for each model-written documentation page |
 | `temperature` | `0.3` | Sampling temperature requested for each model-written documentation page |
+| `token_budget` | `48000` | Context tokens assembled into each page-generation prompt (source, dependencies, graph signals). Oversized sources are trimmed to fit; models serving large context windows can afford more |
+| `dependency_summary_chars` | `200` | Chars of a dependency page's summary injected into pages that depend on it. The in-run summary reservoir scales at 2x and the embed-metadata reservoir at 3x, so raising it lengthens the whole dependency-context chain coherently |
 | `commit_limit` | `500` | Max commits per file walked for git analysis, clamped to 1-10000 |
 | `follow_renames` | `false` | Track file renames through git history |
 | `exclude_patterns` | `[]` | Extra gitignore-style patterns, on top of `.gitignore` |
