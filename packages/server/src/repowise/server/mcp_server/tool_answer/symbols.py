@@ -69,9 +69,7 @@ def _extract_question_identifiers(question: str) -> set[str]:
     return ids
 
 
-def union_defers_to_synthesis(
-    question: str, question_ids: set[str], union_groups: dict
-) -> bool:
+def union_defers_to_synthesis(question: str, question_ids: set[str], union_groups: dict) -> bool:
     """True when an answer-by-union should fall through to synthesis.
 
     Answer-by-union is the right reply for a small set of genuine parallel
@@ -427,7 +425,7 @@ def build_homonym_union_bodies(
     spent = 0
     defs: list[dict] = []
     for name in sorted(union_groups):
-        for d in sorted(union_groups[name], key=lambda x: (x.get("file_path") or "")):
+        for d in sorted(union_groups[name], key=lambda x: x.get("file_path") or ""):
             defs.append(d)
 
     for d in defs:
@@ -648,9 +646,7 @@ async def _hydrate_symbols_for_hits(
         if row.kind in ("constant", "variable") or not verified:
             rich_sig = None
         else:
-            rich_sig = _read_signature_from_source(
-                repo_root, row.file_path, start_line, text=text
-            )
+            rich_sig = _read_signature_from_source(repo_root, row.file_path, start_line, text=text)
         # Does the symbol name match any identifier from the question?
         name_lower = (row.name or "").lower()
         qname_lower = (row.qualified_name or "").lower()
@@ -676,9 +672,7 @@ async def _hydrate_symbols_for_hits(
             "_matched": matched,
         }
         if matched and verified:
-            src = _read_symbol_source(
-                repo_root, row.file_path, start_line, end_line, text=text
-            )
+            src = _read_symbol_source(repo_root, row.file_path, start_line, end_line, text=text)
             if src:
                 entry["source_excerpt"] = src
         by_file.setdefault(row.file_path, []).append(entry)

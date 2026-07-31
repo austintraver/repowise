@@ -54,9 +54,6 @@ from repowise.core.persistence.database import get_session
 from repowise.core.persistence.models import AnswerCache
 from repowise.core.registry import mcp_tool_registry as mcp
 from repowise.server.mcp_server._answer_context import (
-    _MAX_CHARS_PER_HIT_EXCERPT,
-)
-from repowise.server.mcp_server._answer_context import (
     build_context_block as _build_context_block_v2,
 )
 from repowise.server.mcp_server._answer_context import (
@@ -115,18 +112,21 @@ from repowise.server.mcp_server.tool_answer.config import (
     _ANSWER_SCHEMA_VERSION,
     _DOMINANCE_RATIO,
     _ENRICH_TOP_N_HITS,
-    _GATED_EXCERPT_CHARS,
     _GATED_RETURN_HITS,
     _HIGH_CONFIDENCE_SCORE_FLOOR,
     _INLINE_BODY_MAX_LINES,
     _INLINE_BODY_MAX_SYMBOLS,
     _PAGE_EXCERPT_HITS,
-    _SYSTEM_PROMPT,
-    _USER_TEMPLATE,
 )
 from repowise.server.mcp_server.tool_answer.data_shape import (
     _is_data_shape_question,
     mine_data_shape,
+)
+from repowise.server.mcp_server.tool_answer.dials import (
+    answer_excerpt_chars,
+    answer_max_tokens,
+    synthesis_system_prompt,
+    synthesis_user_prompt,
 )
 from repowise.server.mcp_server.tool_answer.retrieval import (
     _apply_domain_penalty,
@@ -155,18 +155,6 @@ from repowise.server.mcp_server.tool_answer.synthesis import (
 )
 
 _log = logging.getLogger("repowise.mcp.answer")
-
-# The excerpt fetch and the prompt formatter each cap page content, and they
-# live in different modules — which is how the formatter came to discard more
-# than half of every excerpt the fetch had paid a database round-trip for.
-# Checked here, at import, because this is the only module that sees both.
-if _MAX_CHARS_PER_HIT_EXCERPT < _GATED_EXCERPT_CHARS:
-    raise RuntimeError(
-        "get_answer would truncate the page content it fetches: the prompt "
-        f"formatter caps an excerpt at {_MAX_CHARS_PER_HIT_EXCERPT} chars "
-        f"while the fetch asks for {_GATED_EXCERPT_CHARS}. Raise "
-        "_MAX_CHARS_PER_HIT_EXCERPT or lower _GATED_EXCERPT_CHARS."
-    )
 
 # Always-synthesize flag. Default ON: synthesis runs for every retrieval and the
 # post-synthesis grading cascade demotes confidence instead of the tool
@@ -1218,10 +1206,18 @@ async def get_answer(
     with contextlib.suppress(Exception):
         prelude = await _build_structured_prelude(hits, decisions, ctx, repo_id)
 
-    user_prompt = _USER_TEMPLATE.format(
+    # Both dials resolve against this repo's config so the prompt the model
+    # reads, the excerpt sizes inside it, and the output budget all agree.
+    repo_root_for_dials = getattr(ctx, "path", None)
+    excerpt_cap = answer_excerpt_chars(repo_root_for_dials)
+    synthesis_budget = answer_max_tokens(repo_root_for_dials)
+    user_prompt = synthesis_user_prompt(
         question=question.strip(),
         n=len(hits),
-        context=_build_context_block_v2(hits, prelude=prelude, decisions=decisions),
+        context=_build_context_block_v2(
+            hits, prelude=prelude, decisions=decisions, max_chars_per_excerpt=excerpt_cap
+        ),
+        max_tokens=synthesis_budget,
     )
 
     # The call budgets itself against what this provider actually needs. A
@@ -1230,10 +1226,11 @@ async def get_answer(
     # those before it could return (#1119).
     answer_text, failure_note = await synthesize(
         provider,
-        _SYSTEM_PROMPT,
+        synthesis_system_prompt(synthesis_budget),
         user_prompt,
         session_factory=getattr(ctx, "session_factory", None),
         repo_id=repo_id,
+        max_tokens=synthesis_budget,
     )
     if failure_note is not None:
         return _degraded_payload(

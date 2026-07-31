@@ -46,6 +46,8 @@ answer_provider: anthropic           # Provider for get_answer synthesis (falls 
 answer_model: claude-haiku-4-5       # Model for get_answer synthesis (falls back to model)
 embedder: mock                       # Embedding provider (mock if no key detected)
 embedding_model: text-embedding-3-small  # Embedding model (provider default if omitted)
+answer_excerpt_chars: 1500            # Page chars per hit in get_answer prompts (200-20000)
+answer_max_tokens: 1024              # get_answer synthesis output budget (256-8192)
 reasoning: auto                      # auto | off | none | minimal | low | medium | high | xhigh | max
 max_tokens: 16384                    # Max output tokens for each generated documentation page
 temperature: 0.3                     # Sampling temperature for generated documentation
@@ -79,6 +81,8 @@ You can edit this file directly. Changes take effect on the next `init`,
 | `model` | provider default | Model identifier passed to the provider |
 | `embedder` | `mock` | `openai`, `gemini`, `ollama`, `openrouter`, `mock` |
 | `embedding_model` | provider default | Embedding model the store was built with. Read wherever an embedder is constructed for this repo (init, update, reindex, search, doctor, and the MCP server's query embedding), so editing it takes effect; `OLLAMA_EMBEDDING_MODEL` / `REPOWISE_EMBEDDING_MODEL` env vars override it |
+| `answer_excerpt_chars` | `1500` | Chars of page content each top `get_answer` hit contributes, to the synthesis prompt and the low-confidence pointer payload alike. Clamped to 200-20000. Local deployments can afford more: the cost is prefill time, not billed tokens |
+| `answer_max_tokens` | `1024` | Output budget for one `get_answer` synthesis call, clamped to 256-8192. The answer's word target scales with it (150-400 words at the default, capped at 1200) |
 | `reasoning` | `auto` | `auto`, `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `max_tokens` | `16384` | Maximum output tokens requested for each model-written documentation page |
 | `temperature` | `0.3` | Sampling temperature requested for each model-written documentation page |
@@ -513,6 +517,8 @@ The `.repowise/.env` file is gitignored automatically.
 | `REPOWISE_ANSWER_PROVIDER` | Provider for `get_answer` synthesis. Answering a question (short grounded prose over retrieved excerpts) is a different workload from writing wiki pages, so the answer surface can run its own provider; falls back to the generation provider when unset |
 | `REPOWISE_ANSWER_MODEL` | Model for `get_answer` synthesis; falls back through `REPOWISE_DOC_MODEL` / `REPOWISE_MODEL` to the persisted model. Together with `embedding_model` this makes the three model roles — wiki writer, answerer, embedder — independently configurable |
 | `REPOWISE_DOC_MODEL` | Older name for the `get_answer` model override; still honored, at lower precedence than `REPOWISE_ANSWER_MODEL` |
+| `REPOWISE_ANSWER_EXCERPT_CHARS` | Override `answer_excerpt_chars` for this process |
+| `REPOWISE_ANSWER_MAX_TOKENS` | Override `answer_max_tokens` for this process |
 | `REPOWISE_REASONING` | Override `reasoning` (see valid values above) |
 | `REPOWISE_ANSWER_TIMEOUT_S` | Seconds `get_answer` waits for synthesis before giving up. Defaults to a per-provider budget: 60s for the remote API providers, 120s for `ollama` and `litellm`, 180s for `codex_cli` and `opencode`. Raise it if your model is slower than its class suggests, lower it if you would rather an agent fail fast than block. Capped at 600s. Note your MCP client enforces its own tool timeout underneath this one, so setting a value above it produces a client-side error instead of repowise's diagnosable "synthesis exceeded its budget" response |
 

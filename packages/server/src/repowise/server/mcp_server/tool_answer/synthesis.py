@@ -338,7 +338,7 @@ def _synthesis_failure_note(exc: BaseException, provider, timeout_s: float, time
     )
 
 
-def _empty_completion_note(provider, response) -> str:
+def _empty_completion_note(provider, response, max_tokens: int = _SYNTHESIS_MAX_TOKENS) -> str:
     """Note for a call that succeeded and returned no text.
 
     Measured against a local reasoning model on ollama: it spent all 1024
@@ -353,7 +353,7 @@ def _empty_completion_note(provider, response) -> str:
     )
     if getattr(response, "stop_reason", None) == "max_tokens":
         return (
-            f"DEGRADED: the model used its entire {_SYNTHESIS_MAX_TOKENS}-token "
+            f"DEGRADED: the model used its entire {max_tokens}-token "
             f"budget without emitting an answer ({who}). Reasoning models spend "
             "that budget on hidden thinking; try a non-reasoning model for "
             "synthesis. Read the listed files to answer meanwhile."
@@ -449,6 +449,7 @@ async def synthesize(
     *,
     session_factory=None,
     repo_id: str | None = None,
+    max_tokens: int = _SYNTHESIS_MAX_TOKENS,
 ) -> tuple[str, str | None]:
     """Run one synthesis call. Returns ``(answer_text, failure_note)``.
 
@@ -477,7 +478,7 @@ async def synthesize(
                 await provider.generate(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
-                    max_tokens=_SYNTHESIS_MAX_TOKENS,
+                    max_tokens=max_tokens,
                     temperature=_SYNTHESIS_TEMPERATURE,
                 ),
                 None,
@@ -499,7 +500,9 @@ async def synthesize(
         # go unpriced.
         await _record_synthesis_cost(provider, response, session_factory, repo_id)
         text = (getattr(response, "content", None) or "").strip()
-        return (text, None) if text else ("", _empty_completion_note(provider, response))
+        return (
+            (text, None) if text else ("", _empty_completion_note(provider, response, max_tokens))
+        )
 
     _log.warning(
         "get_answer LLM call failed (provider=%s, model=%s, budget=%.1fs, timed_out=%s): %s",
