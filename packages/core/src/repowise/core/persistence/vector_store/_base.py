@@ -125,6 +125,23 @@ class VectorStore(ABC):
         """
         return False
 
+    async def upsert_page_texts(self, items: list[tuple[str, str, dict]]) -> bool:
+        """Persist many ``(page_id, text, metadata)`` rows without embedding.
+
+        Generation reads the store between levels for two things only: the
+        row's existence (resume seeding) and its ``content_snippet`` (the
+        dependency summary injected into later pages' prompts). Neither
+        depends on the vector, so a backend that can land the row alone lets
+        generation finish without the embedding model ever being resident;
+        the vectors are then written in one end-of-run :meth:`embed_batch`
+        over the same items (or by ``repowise reindex``).
+
+        Returns ``False`` when the backend cannot persist a row without its
+        vector — callers fall back to :meth:`embed_batch`, the historical
+        per-level behaviour — and ``True`` after a successful write.
+        """
+        return False
+
     @abstractmethod
     async def search(self, query: str, limit: int = 10) -> list[SearchResult]:
         """Embed *query* and return the *limit* nearest pages."""

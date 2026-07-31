@@ -61,6 +61,18 @@ class InMemoryVectorStore(VectorStore):
             )
         return results
 
+    async def upsert_page_texts(self, items: list[tuple[str, str, dict]]) -> bool:
+        """Store rows with a zero placeholder vector, no embedder call.
+
+        Summary lookups and ``list_page_ids`` read only the metadata, so the
+        rows behave identically to embedded ones; ``cosine_similarity``
+        scores a zero vector 0.0, so unembedded rows rank last in search
+        until the end-of-run :meth:`embed_batch` replaces the placeholder.
+        """
+        for page_id, _text, metadata in items:
+            self._store[page_id] = ([0.0] * self._embedder.dimensions, dict(metadata))
+        return True
+
     async def upsert_vectors(self, items: list[tuple[str, list[float], dict]]) -> bool:
         for page_id, vector, metadata in items:
             self._store[page_id] = (list(vector), dict(metadata))
