@@ -592,7 +592,7 @@ class _GenerationRun:
                     # Summary capture is cheap (string ops) — keep inline so
                     # the next page's context assembly sees it immediately.
                     self.completed_page_summaries[result.target_path] = overview_summary(
-                        result.content
+                        result.content, 2 * self.config.dependency_summary_chars
                     )
                     # Progress tick fires the moment the page is ready.
                     if self.on_page_done is not None:
@@ -625,7 +625,9 @@ class _GenerationRun:
                             and getattr(self.vector_store, "persists_across_runs", False)
                         )
                     ):
-                        embed_items.append(_embed_item(result))
+                        embed_items.append(
+                            _embed_item(result, self.config.dependency_summary_chars)
+                        )
                 return result
             except Exception as exc:
                 if self.job_system is not None and self.job_id is not None:
@@ -958,7 +960,7 @@ def _compute_kg_file_scores(kg_ctx: Any) -> dict[str, float]:
     return scores
 
 
-def _embed_item(page: GeneratedPage) -> tuple[str, str, dict]:
+def _embed_item(page: GeneratedPage, summary_chars: int = 200) -> tuple[str, str, dict]:
     """Build the ``(page_id, text, metadata)`` tuple for embedding.
 
     ``title`` is load-bearing, not decoration: it feeds the coverage rerank
@@ -967,7 +969,7 @@ def _embed_item(page: GeneratedPage) -> tuple[str, str, dict]:
     with a blank title, while ``reindex`` and ``doctor --repair`` set it, so
     the store disagreed with itself depending on how a page got there.
     """
-    summary = overview_summary(page.content)
+    summary = overview_summary(page.content, 2 * summary_chars)
     return (
         page.page_id,
         page.content,
@@ -975,7 +977,7 @@ def _embed_item(page: GeneratedPage) -> tuple[str, str, dict]:
             "title": page.title,
             "page_type": page.page_type,
             "target_path": page.target_path,
-            "content": page.content[:600],
+            "content": page.content[: 3 * summary_chars],
             "summary": summary,
         },
     )

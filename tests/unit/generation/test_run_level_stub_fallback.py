@@ -85,6 +85,7 @@ def _run_level() -> tuple[list[GeneratedPage], _RecordingJobSystem, _RecordingSt
             on_page_ready=None,
             vector_store=store,
             completed_page_summaries={},
+        config=SimpleNamespace(dependency_summary_chars=200),
         )
         return await _GenerationRun.run_level(
             run,

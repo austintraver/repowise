@@ -342,7 +342,7 @@ class ContextAssembler:
         if page_summaries:
             for fp in files:
                 if fp in page_summaries:
-                    file_summaries[fp] = page_summaries[fp][:200]
+                    file_summaries[fp] = page_summaries[fp][: self._config.dependency_summary_chars]
 
         # Community info: prefer caller-supplied label (community-grouped
         # module pages already know their label), else derive the dominant
@@ -366,7 +366,9 @@ class ContextAssembler:
             {
                 "path": fc.file_path,
                 "pagerank": round(fc.pagerank_score, 4),
-                "summary": (file_summaries.get(fc.file_path) or "").strip()[:200],
+                "summary": (file_summaries.get(fc.file_path) or "").strip()[
+                    : self._config.dependency_summary_chars
+                ],
                 "is_entry_point": fc.is_entry_point,
             }
             for fc in ranked
@@ -596,9 +598,7 @@ class ContextAssembler:
         # list is a different list on every run.
         sorted_pr = sorted(pagerank.items(), key=lambda x: (-x[1], x[0]))
         top_files = [
-            _TopFile(path=p, score=s)
-            for p, s in sorted_pr[:_MAX_TOP_FILES]
-            if not is_external(p)
+            _TopFile(path=p, score=s) for p, s in sorted_pr[:_MAX_TOP_FILES] if not is_external(p)
         ]
 
         # SCCs with len > 1 are true circular deps
