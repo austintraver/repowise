@@ -48,6 +48,59 @@ TOKEN_BUDGET = 8000
 CHARS_PER_TOKEN = 4
 CHAR_BUDGET = TOKEN_BUDGET * CHARS_PER_TOKEN
 
+# The default above prices a hosted agent's context; a local deployment may
+# want a bigger single payload (an agent with a 200k window reading its own
+# machine pays only its own context for it). Resolved per call: process env,
+# then the repo's config.yaml, then TOKEN_BUDGET — the same precedence every
+# other repo setting uses. The host cap in :func:`effective_char_budget`
+# still clamps whatever this resolves to, so a raised budget can never trip
+# the host's reject-with-isError path; the ceiling below is the cap's
+# measured default so a mis-set value cannot even ask for more.
+_CONTEXT_TOKEN_BUDGET_ENV = "REPOWISE_CONTEXT_TOKEN_BUDGET"
+_CONTEXT_TOKEN_BUDGET_CONFIG_KEY = "context_token_budget"
+_CONTEXT_TOKEN_BUDGET_BOUNDS = (1_000, 25_000)
+
+
+def configured_token_budget() -> int:
+    """The deployment's context token budget: env, then config.yaml, then default."""
+    raw_env = os.environ.get(_CONTEXT_TOKEN_BUDGET_ENV, "").strip()
+    value: int | None = None
+    if raw_env:
+        try:
+            value = int(raw_env)
+        except ValueError:
+            logger.warning("%s=%r is not an integer; ignoring", _CONTEXT_TOKEN_BUDGET_ENV, raw_env)
+    if value is None:
+        value = _config_yaml_token_budget()
+    if value is None:
+        return TOKEN_BUDGET
+    low, high = _CONTEXT_TOKEN_BUDGET_BOUNDS
+    return max(low, min(high, value))
+
+
+def _config_yaml_token_budget() -> int | None:
+    from pathlib import Path
+
+    from repowise.server.mcp_server import _state
+
+    repo_path = getattr(_state, "_repo_path", None)
+    if not repo_path:
+        return None
+    config_path = Path(str(repo_path)) / ".repowise" / "config.yaml"
+    try:
+        if config_path.is_file():
+            import yaml
+
+            data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            if isinstance(data, dict):
+                raw = data.get(_CONTEXT_TOKEN_BUDGET_CONFIG_KEY)
+                if raw is not None and not isinstance(raw, bool):
+                    return int(raw)
+    except Exception:
+        logger.debug("Failed to read %s from %s", _CONTEXT_TOKEN_BUDGET_CONFIG_KEY, config_path)
+    return None
+
+
 # Claude Code's MAX_MCP_OUTPUT_TOKENS default (measured 2026-07-11). A result
 # over this is rejected with an isError, so our ceiling must stay under it.
 HOST_MCP_TOKEN_CAP_DEFAULT = 25000
@@ -77,13 +130,18 @@ def host_token_cap() -> int:
     return HOST_MCP_TOKEN_CAP_DEFAULT
 
 
-def effective_char_budget(configured: int = CHAR_BUDGET) -> int:
-    """``configured`` ceiling, lowered under the live host cap when that is tighter.
+def effective_char_budget(configured: int | None = None) -> int:
+    """The configured ceiling, lowered under the live host cap when that is tighter.
 
-    Default host cap (25000) leaves our 8000-token budget untouched; a narrowed
+    ``configured`` defaults to :func:`configured_token_budget` (env, then the
+    repo's config.yaml, then ``TOKEN_BUDGET``), in chars. The default host cap
+    (25000) leaves the 8000-token default untouched; a narrowed
     ``MAX_MCP_OUTPUT_TOKENS`` pulls us down with it so we never trip the host's
-    reject-with-isError path (one isError = server abandonment, Phase 1).
+    reject-with-isError path (one isError = server abandonment, Phase 1) — and
+    the same clamp bounds a raised deployment budget.
     """
+    if configured is None:
+        configured = configured_token_budget() * CHARS_PER_TOKEN
     host_char_ceiling = int(host_token_cap() * HOST_CAP_BUDGET_FRACTION) * CHARS_PER_TOKEN
     return min(configured, host_char_ceiling)
 
