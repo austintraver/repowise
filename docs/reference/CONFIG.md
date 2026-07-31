@@ -75,6 +75,7 @@ You can edit this file directly. Changes take effect on the next `init`,
 | `model` | provider default | Model identifier passed to the provider |
 | `embedder` | `mock` | `openai`, `gemini`, `ollama`, `openrouter`, `mock` |
 | `embedding_model` | provider default | Embedding model identifier |
+| `context_token_budget` | `8000` | Token budget for one `get_context` response, clamped to 1000-25000 and always further clamped under the MCP host's output cap. Local agents with large context windows can afford more per call |
 | `reasoning` | `auto` | `auto`, `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `max_tokens` | `16384` | Maximum output tokens requested for each model-written documentation page |
 | `commit_limit` | `500` | Max commits per file walked for git analysis, clamped to 1-10000 |
@@ -494,6 +495,7 @@ The `.repowise/.env` file is gitignored automatically.
 | `REPOWISE_PROVIDER` | Override provider (skips auto-detection) |
 | `REPOWISE_MODEL` | Override model |
 | `REPOWISE_DOC_MODEL` | Override the model used for `get_answer` synthesis specifically |
+| `REPOWISE_CONTEXT_TOKEN_BUDGET` | Override `context_token_budget` for this process |
 | `REPOWISE_REASONING` | Override `reasoning` (see valid values above) |
 | `REPOWISE_ANSWER_TIMEOUT_S` | Seconds `get_answer` waits for synthesis before giving up. Defaults to a per-provider budget: 60s for the remote API providers, 120s for `ollama` and `litellm`, 180s for `codex_cli` and `opencode`. Raise it if your model is slower than its class suggests, lower it if you would rather an agent fail fast than block. Capped at 600s. Note your MCP client enforces its own tool timeout underneath this one, so setting a value above it produces a client-side error instead of repowise's diagnosable "synthesis exceeded its budget" response |
 
