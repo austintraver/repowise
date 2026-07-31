@@ -83,6 +83,7 @@ You can edit this file directly. Changes take effect on the next `init`,
 | `embedding_model` | provider default | Embedding model the store was built with. Read wherever an embedder is constructed for this repo (init, update, reindex, search, doctor, and the MCP server's query embedding), so editing it takes effect; `OLLAMA_EMBEDDING_MODEL` / `REPOWISE_EMBEDDING_MODEL` env vars override it |
 | `answer_excerpt_chars` | `1500` | Chars of page content each top `get_answer` hit contributes, to the synthesis prompt and the low-confidence pointer payload alike. Clamped to 200-20000. Local deployments can afford more: the cost is prefill time, not billed tokens |
 | `answer_max_tokens` | `1024` | Output budget for one `get_answer` synthesis call, clamped to 256-8192. The answer's word target scales with it (150-400 words at the default, capped at 1200) |
+| `context_token_budget` | `8000` | Token budget for one `get_context` response, clamped to 1000-25000 and always further clamped under the MCP host's output cap. Local agents with large context windows can afford more per call |
 | `reasoning` | `auto` | `auto`, `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `max_tokens` | `16384` | Maximum output tokens requested for each model-written documentation page |
 | `temperature` | `0.3` | Sampling temperature requested for each model-written documentation page |
@@ -519,6 +520,7 @@ The `.repowise/.env` file is gitignored automatically.
 | `REPOWISE_DOC_MODEL` | Older name for the `get_answer` model override; still honored, at lower precedence than `REPOWISE_ANSWER_MODEL` |
 | `REPOWISE_ANSWER_EXCERPT_CHARS` | Override `answer_excerpt_chars` for this process |
 | `REPOWISE_ANSWER_MAX_TOKENS` | Override `answer_max_tokens` for this process |
+| `REPOWISE_CONTEXT_TOKEN_BUDGET` | Override `context_token_budget` for this process |
 | `REPOWISE_REASONING` | Override `reasoning` (see valid values above) |
 | `REPOWISE_ANSWER_TIMEOUT_S` | Seconds `get_answer` waits for synthesis before giving up. Defaults to a per-provider budget: 60s for the remote API providers, 120s for `ollama` and `litellm`, 180s for `codex_cli` and `opencode`. Raise it if your model is slower than its class suggests, lower it if you would rather an agent fail fast than block. Capped at 600s. Note your MCP client enforces its own tool timeout underneath this one, so setting a value above it produces a client-side error instead of repowise's diagnosable "synthesis exceeded its budget" response |
 
