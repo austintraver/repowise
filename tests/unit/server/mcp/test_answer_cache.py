@@ -52,9 +52,11 @@ class _Provider:
     def __init__(self, content: str) -> None:
         self.content = content
         self.calls = 0
+        self.last_kwargs: dict[str, object] = {}
 
     async def generate(self, **kwargs):
         self.calls += 1
+        self.last_kwargs = dict(kwargs)
         return SimpleNamespace(content=self.content)
 
 
@@ -180,6 +182,160 @@ async def test_cache_bypassed_when_indexed_commit_changes(setup_mcp, factory, se
     rows = await _cache_rows(factory)
     assert len(rows) == 1
     assert _json.loads(rows[0].payload_json)["_indexed_commit"] == "b" * 40
+
+
+@pytest.mark.parametrize(
+    ("env_name", "first_value", "second_value"),
+    [
+        pytest.param("REPOWISE_ANSWER_TEMPERATURE", "0.2", "0.8", id="temperature"),
+        pytest.param("REPOWISE_ANSWER_TOP_P", "0.7", "0.9", id="top-p"),
+        pytest.param("REPOWISE_ANSWER_TOP_K", "32", "64", id="top-k"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_each_answer_sampling_field_bypasses_cache(
+    setup_mcp,
+    factory,
+    monkeypatch,
+    env_name,
+    first_value,
+    second_value,
+):
+    import repowise.server.mcp_server.tool_answer.answer as answer_mod
+    from repowise.server.mcp_server import get_answer
+
+    _patch_retrieval(monkeypatch, answer_mod)
+    monkeypatch.setenv(env_name, first_value)
+    first_provider = _Provider("First sampling answer (src/auth/service.py).")
+    _patch_provider(monkeypatch, answer_mod, first_provider)
+    await get_answer(QUESTION)
+
+    monkeypatch.setenv(env_name, second_value)
+    second_provider = _Provider("Changed sampling answer (src/auth/service.py).")
+    _patch_provider(monkeypatch, answer_mod, second_provider)
+    result = await get_answer(QUESTION)
+
+    assert second_provider.calls == 1
+    assert "Changed sampling answer" in result["answer"]
+
+
+@pytest.mark.asyncio
+async def test_get_answer_forwards_resolved_sampling_to_synthesis(
+    setup_mcp,
+    monkeypatch,
+):
+    import repowise.server.mcp_server.tool_answer.answer as answer_mod
+    from repowise.server.mcp_server import get_answer
+
+    _patch_retrieval(monkeypatch, answer_mod)
+    monkeypatch.setenv("REPOWISE_ANSWER_TEMPERATURE", "1.0")
+    monkeypatch.setenv("REPOWISE_ANSWER_TOP_P", "0.95")
+    monkeypatch.setenv("REPOWISE_ANSWER_TOP_K", "64")
+    provider = _Provider("Configured sampling answer (src/auth/service.py).")
+    _patch_provider(monkeypatch, answer_mod, provider)
+
+    await get_answer(QUESTION)
+
+    assert provider.last_kwargs["sampling"].configured() == {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 64,
+    }
+
+
+@pytest.mark.parametrize(
+    "changed_input",
+    ["provider", "model", "scope", "excerpt_chars", "max_tokens", "prompt_version"],
+)
+@pytest.mark.asyncio
+async def test_each_other_synthesis_input_bypasses_cache(
+    setup_mcp,
+    factory,
+    monkeypatch,
+    changed_input,
+):
+    import repowise.server.mcp_server.tool_answer.answer as answer_mod
+    from repowise.server.mcp_server import get_answer
+
+    _patch_retrieval(monkeypatch, answer_mod)
+    first_scope = "src/auth" if changed_input == "scope" else None
+    if changed_input == "excerpt_chars":
+        monkeypatch.setenv("REPOWISE_ANSWER_EXCERPT_CHARS", "1500")
+    if changed_input == "max_tokens":
+        monkeypatch.setenv("REPOWISE_ANSWER_MAX_TOKENS", "1024")
+
+    first_provider = _Provider("Original identity answer (src/auth/service.py).")
+    _patch_provider(monkeypatch, answer_mod, first_provider)
+    await get_answer(QUESTION, scope=first_scope)
+
+    second_scope = first_scope
+    second_provider = _Provider("Changed identity answer (src/auth/service.py).")
+    if changed_input == "provider":
+        second_provider.provider_name = "other"
+    elif changed_input == "model":
+        second_provider.model_name = "mock-2"
+    elif changed_input == "scope":
+        second_scope = "src/other"
+    elif changed_input == "excerpt_chars":
+        monkeypatch.setenv("REPOWISE_ANSWER_EXCERPT_CHARS", "3000")
+    elif changed_input == "max_tokens":
+        monkeypatch.setenv("REPOWISE_ANSWER_MAX_TOKENS", "2048")
+    elif changed_input == "prompt_version":
+        monkeypatch.setattr(
+            answer_mod,
+            "_SYNTHESIS_PROMPT_VERSION",
+            answer_mod._SYNTHESIS_PROMPT_VERSION + 1,
+        )
+    _patch_provider(monkeypatch, answer_mod, second_provider)
+
+    result = await get_answer(QUESTION, scope=second_scope)
+
+    assert second_provider.calls == 1
+    assert "Changed identity answer" in result["answer"]
+
+
+@pytest.mark.asyncio
+async def test_wiki_content_revision_bypasses_cache(
+    setup_mcp,
+    factory,
+    session,
+    monkeypatch,
+):
+    import repowise.server.mcp_server.tool_answer.answer as answer_mod
+    from repowise.core.persistence.models import Page
+    from repowise.server.mcp_server import get_answer
+
+    _patch_retrieval(monkeypatch, answer_mod)
+    original_provider = _Provider("Original wiki answer (src/auth/service.py).")
+    _patch_provider(monkeypatch, answer_mod, original_provider)
+    await get_answer(QUESTION)
+
+    repo = (await session.execute(select(Repository))).scalars().first()
+    now = datetime.now(UTC)
+    session.add(
+        Page(
+            id="module_page:new",
+            repository_id=repo.id,
+            page_type="module_page",
+            title="New",
+            content="New wiki content",
+            summary="New wiki content",
+            target_path="new",
+            source_hash="a" * 64,
+            model_name="mock-1",
+            provider_name="mock",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    await session.commit()
+
+    changed_provider = _Provider("Changed wiki answer (src/auth/service.py).")
+    _patch_provider(monkeypatch, answer_mod, changed_provider)
+    result = await get_answer(QUESTION)
+
+    assert changed_provider.calls == 1
+    assert "Changed wiki answer" in result["answer"]
 
 
 @pytest.mark.asyncio

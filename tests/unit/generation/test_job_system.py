@@ -101,6 +101,42 @@ def test_complete_page_json_persisted(tmp_path):
     assert "file_page:x.py" in cp.completed_page_ids
 
 
+def test_sampling_provenance_round_trips_in_checkpoint(tmp_path):
+    js = _make_system(tmp_path)
+    job_id = _create(js)
+
+    js.record_sampling(
+        job_id,
+        outbound_sampling={"temperature": 1.0, "top_p": 0.95, "top_k": 64},
+        effective_sampling={"temperature": 1.0, "top_p": 0.95, "top_k": 64},
+    )
+
+    checkpoint = JobSystem(tmp_path / "jobs").get_checkpoint(job_id)
+    assert checkpoint.outbound_sampling == {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 64,
+    }
+    assert checkpoint.effective_sampling == checkpoint.outbound_sampling
+
+
+def test_sampling_provenance_rejects_disagreement_within_job(tmp_path):
+    js = _make_system(tmp_path)
+    job_id = _create(js)
+    js.record_sampling(
+        job_id,
+        outbound_sampling={"temperature": 1.0},
+        effective_sampling={"temperature": 1.0},
+    )
+
+    with pytest.raises(ValueError, match="changed within one generation job"):
+        js.record_sampling(
+            job_id,
+            outbound_sampling={"temperature": 0.3},
+            effective_sampling={"temperature": 0.3},
+        )
+
+
 # ---------------------------------------------------------------------------
 # fail_page
 # ---------------------------------------------------------------------------

@@ -11,7 +11,12 @@ import pytest
 
 pytest.importorskip("openai", reason="openai SDK not installed")
 
-from repowise.core.providers.llm.base import GeneratedResponse, ProviderError, RateLimitError
+from repowise.core.providers.llm.base import (
+    GeneratedResponse,
+    ProviderError,
+    RateLimitError,
+    SamplingParameters,
+)
 from repowise.core.providers.llm.openai import OpenAIProvider
 
 # ---------------------------------------------------------------------------
@@ -198,12 +203,19 @@ async def test_generate_sends_correct_messages():
     with patch("openai.AsyncOpenAI") as mock_client:
         mock_client.return_value.chat.completions.create = fake_create
         provider._client = mock_client.return_value
-        await provider.generate("system msg", "user msg", max_tokens=2048, temperature=0.5)
+        result = await provider.generate(
+            "system msg",
+            "user msg",
+            max_tokens=2048,
+            sampling=SamplingParameters(temperature=0.5),
+        )
 
     kw = captured_kwargs[0]
     assert kw["model"] == "gpt-4o"
     assert kw["max_completion_tokens"] == 2048
     assert kw["temperature"] == 0.5
+    assert result.usage["outbound_sampling"] == {"temperature": 0.5}
+    assert result.usage["effective_sampling"] == {}
     assert "reasoning_effort" not in kw
     assert "extra_body" not in kw
     messages = kw["messages"]
@@ -212,7 +224,7 @@ async def test_generate_sends_correct_messages():
 
 
 @pytest.mark.parametrize("model", ["gpt-5.6-luna", "gpt-5-mini", "o3", "o1", "o4-mini"])
-async def test_generate_clamps_temperature_for_reasoning_models(model):
+async def test_generate_rejects_changed_temperature_for_reasoning_models(model):
     """GPT-5+ / o-series models only accept the default temperature of 1."""
     provider = OpenAIProvider(api_key="sk-test", model=model)
     mock_response = _make_mock_chat_response()
@@ -225,9 +237,14 @@ async def test_generate_clamps_temperature_for_reasoning_models(model):
     with patch("openai.AsyncOpenAI") as mock_client:
         mock_client.return_value.chat.completions.create = fake_create
         provider._client = mock_client.return_value
-        await provider.generate("system msg", "user msg", temperature=0.3)
+        with pytest.raises(ProviderError, match="cannot be sent unchanged"):
+            await provider.generate(
+                "system msg",
+                "user msg",
+                sampling=SamplingParameters(temperature=0.3),
+            )
 
-    assert captured_kwargs[0]["temperature"] == 1.0
+    assert captured_kwargs == []
 
 
 async def test_generate_forwards_minimal_reasoning_effort():

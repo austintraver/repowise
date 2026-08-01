@@ -47,10 +47,15 @@ provider: anthropic                  # LLM provider
 model: claude-sonnet-4-6             # Model identifier
 answer_provider: anthropic           # Provider for get_answer synthesis (optional; falls back to provider)
 answer_model: claude-haiku-4-5       # Model for get_answer synthesis (optional; falls back to model)
+answer_temperature: 0.2              # Sampling temperature for get_answer synthesis
+# answer_top_p: 0.95                 # Optional; enable only when the model accepts it
+# answer_top_k: 64                   # Optional; enable only when the model accepts it
 embedder: gemini                     # Embedding provider
 reasoning: auto                      # auto | off/none | minimal | low | medium | high | xhigh | max
 max_tokens: 16384                    # Max output tokens per generated documentation page
 temperature: 0.3                     # Sampling temperature for generated documentation
+# top_p: 0.95                        # Optional; enable only when the model accepts it
+# top_k: 64                          # Optional; enable only when the model accepts it
 exclude_patterns:                    # Gitignore-style patterns
   - vendor/
   - "*.generated.*"
@@ -84,9 +89,17 @@ workspace generation, and server-triggered generation. If generation reaches a
 token limit before the page is complete, repowise rejects the partial page
 instead of saving it.
 
-`temperature` controls sampling for the same model-written documentation
-calls. It must be finite and non-negative. Providers may enforce a narrower
-range or normalize the requested value for particular model families.
+`temperature`, `top_p`, and `top_k` control sampling for model-written
+documentation. They apply to page prose, concept-outline naming and repair,
+and knowledge-graph prose. `temperature` must be finite and non-negative,
+`top_p` must be between 0 and 1, and `top_k` must be a positive integer. A
+configured value is sent unchanged; if the selected provider or model cannot
+accept it, generation fails instead of dropping, clamping, or replacing it.
+
+`answer_temperature`, `answer_top_p`, and `answer_top_k` independently control
+sampling for `get_answer` synthesis under the same validation and
+exact-transmission rules. Leaving an optional `top_p` or `top_k` unset lets the
+provider or model choose its default.
 
 ---
 
@@ -353,6 +366,9 @@ repowise also writes a `.mcp.json` at the repository root for Claude Code auto-d
 | `OLLAMA_BASE_URL` | Ollama server URL (default: `http://localhost:11434`) |
 | `LITELLM_API_KEY` | LiteLLM proxy key |
 | `REPOWISE_PROVIDER` | Override provider (skips auto-detection) |
+| `REPOWISE_ANSWER_TEMPERATURE` | Override `answer_temperature` for this process |
+| `REPOWISE_ANSWER_TOP_P` | Override `answer_top_p` for this process |
+| `REPOWISE_ANSWER_TOP_K` | Override `answer_top_k` for this process |
 | `REPOWISE_DB_URL` | Use PostgreSQL instead of SQLite (e.g., `postgresql+asyncpg://...`) |
 | `REPOWISE_HOST` | API server host (default: `127.0.0.1`) |
 | `REPOWISE_PORT` | API server port (default: `7337`) |

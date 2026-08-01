@@ -35,7 +35,7 @@ from typing import Any
 
 import structlog
 
-from repowise.core.providers.llm.base import BaseProvider, CacheHint
+from repowise.core.providers.llm.base import BaseProvider, CacheHint, SamplingParameters
 
 log = structlog.get_logger(__name__)
 
@@ -750,7 +750,7 @@ async def enrich_suggestion(
         system,
         user,
         max_tokens=max_tokens,
-        temperature=0.1,
+        sampling=SamplingParameters(temperature=0.1),
         cache_hints=(CacheHint(segment="system"),),
     )
 

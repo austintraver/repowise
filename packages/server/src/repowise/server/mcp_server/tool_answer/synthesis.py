@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 from typing import NamedTuple
 
+from repowise.core.providers.llm.base import SamplingParameters
 from repowise.server.mcp_server.tool_answer.config import (
     _SYNTHESIS_MAX_TOKENS,
     _SYNTHESIS_TEMPERATURE,
@@ -450,6 +451,7 @@ async def synthesize(
     session_factory=None,
     repo_id: str | None = None,
     max_tokens: int = _SYNTHESIS_MAX_TOKENS,
+    sampling: SamplingParameters | None = None,
 ) -> tuple[str, str | None]:
     """Run one synthesis call. Returns ``(answer_text, failure_note)``.
 
@@ -464,6 +466,7 @@ async def synthesize(
     persisted.
     """
     timeout_s = _synthesis_timeout(provider)
+    resolved_sampling = sampling or SamplingParameters(temperature=_SYNTHESIS_TEMPERATURE)
 
     async def _generate() -> tuple[object | None, BaseException | None]:
         """Swallow the provider's own errors so only our deadline escapes.
@@ -479,7 +482,7 @@ async def synthesize(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     max_tokens=max_tokens,
-                    temperature=_SYNTHESIS_TEMPERATURE,
+                    sampling=resolved_sampling,
                 ),
                 None,
             )

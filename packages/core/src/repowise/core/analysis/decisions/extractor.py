@@ -40,6 +40,7 @@ from typing import Any
 import structlog
 
 from repowise.core.analysis.decisions.gate import apply_substring_gate
+from repowise.core.providers.llm.base import SamplingParameters
 
 from .prompts import (
     _SYSTEM_PROMPT,
@@ -507,7 +508,10 @@ class DecisionExtractor:
         )
 
         response = await self._provider.generate(
-            _SYSTEM_PROMPT, prompt, max_tokens=2000, temperature=0.2
+            _SYSTEM_PROMPT,
+            prompt,
+            max_tokens=2000,
+            sampling=SamplingParameters(temperature=0.2),
         )
         return self._parse_decisions_json(response.content)
 
@@ -589,7 +593,10 @@ class DecisionExtractor:
 
             prompt = GIT_ARCHAEOLOGY_PROMPT.format(commits_block=commits_block)
             response = await self._provider.generate(
-                _SYSTEM_PROMPT, prompt, max_tokens=2000, temperature=0.2
+                _SYSTEM_PROMPT,
+                prompt,
+                max_tokens=2000,
+                sampling=SamplingParameters(temperature=0.2),
             )
             extracted = self._parse_decisions_json(response.content)
 
@@ -691,7 +698,10 @@ class DecisionExtractor:
                     content=content[:15_000],  # Limit token usage
                 )
                 response = await self._provider.generate(
-                    _SYSTEM_PROMPT, prompt, max_tokens=3000, temperature=0.2
+                    _SYSTEM_PROMPT,
+                    prompt,
+                    max_tokens=3000,
+                    sampling=SamplingParameters(temperature=0.2),
                 )
                 extracted = self._parse_decisions_json(response.content)
                 for d in extracted:
@@ -748,7 +758,10 @@ class DecisionExtractor:
                     stripped = self._strip_code_blocks(content)
                     prompt = README_MINING_PROMPT.format(file_path=rel, content=stripped[:15_000])
                     response = await self._provider.generate(
-                        _SYSTEM_PROMPT, prompt, max_tokens=2000, temperature=0.2
+                        _SYSTEM_PROMPT,
+                        prompt,
+                        max_tokens=2000,
+                        sampling=SamplingParameters(temperature=0.2),
                     )
                     for d in self._parse_decisions_json(response.content):
                         d.source = "adr"
@@ -990,7 +1003,10 @@ class DecisionExtractor:
         prompt = CHANGELOG_MINING_PROMPT.format(entries_block=block)
         try:
             response = await self._provider.generate(
-                _SYSTEM_PROMPT, prompt, max_tokens=2500, temperature=0.2
+                _SYSTEM_PROMPT,
+                prompt,
+                max_tokens=2500,
+                sampling=SamplingParameters(temperature=0.2),
             )
         except Exception:
             logger.warning("decision_extractor.changelog_mining_failed", file=rel)
@@ -1056,7 +1072,10 @@ class DecisionExtractor:
             prompt = PR_BODY_MINING_PROMPT.format(bodies_block=bodies_block)
             try:
                 response = await self._provider.generate(
-                    _SYSTEM_PROMPT, prompt, max_tokens=2500, temperature=0.2
+                    _SYSTEM_PROMPT,
+                    prompt,
+                    max_tokens=2500,
+                    sampling=SamplingParameters(temperature=0.2),
                 )
             except Exception:
                 return []
@@ -1126,7 +1145,10 @@ class DecisionExtractor:
             prompt = COMMENT_ARCHAEOLOGY_PROMPT.format(comments_block=comments_block)
             try:
                 response = await self._provider.generate(
-                    _SYSTEM_PROMPT, prompt, max_tokens=2500, temperature=0.2
+                    _SYSTEM_PROMPT,
+                    prompt,
+                    max_tokens=2500,
+                    sampling=SamplingParameters(temperature=0.2),
                 )
             except Exception:
                 return []

@@ -19,7 +19,7 @@ from repowise.core.generation.concept_tree.grouping import ConceptGroup
 from repowise.core.generation.concept_tree.planner import PlannerInputs, name_groups
 from repowise.core.pipeline import run_pipeline
 from repowise.core.pipeline.modes import OrchestratorMode
-from repowise.core.providers.llm.base import GeneratedResponse
+from repowise.core.providers.llm.base import GeneratedResponse, SamplingParameters
 from repowise.core.providers.llm.mock import MockProvider
 
 # ---------------------------------------------------------------------------
@@ -123,7 +123,9 @@ async def test_the_namer_runs_on_the_real_generation_path(tmp_path):
 
     result = await _run(repo, provider)
 
-    assert provider.naming_calls == 1, "naming must be exactly one call, not one per page"
+    assert 1 <= provider.naming_calls <= 2, (
+        "naming may make one bounded repair call, never one call per page"
+    )
     pages = _module_pages(result)
     assert pages, "fixture produced no concept pages, so it cannot test naming"
     assert any(
@@ -355,12 +357,16 @@ async def test_repair_is_budgeted_for_the_number_of_titles_it_must_fix():
     ships an outline whose every title came from a path. Observed for real.
     """
     seen: list[int] = []
+    seen_sampling: list[SamplingParameters] = []
+    seen_user_prompts: list[str] = []
 
     class SectionsOnly(MockProvider):
         """Answers with sections and no names, so every group falls back."""
 
         async def generate(self, system_prompt: str = "", user_prompt: str = "", **kwargs):
             seen.append(int(kwargs.get("max_tokens") or 0))
+            seen_sampling.append(kwargs["sampling"])
+            seen_user_prompts.append(user_prompt)
             if "GROUPS TO RENAME" in user_prompt:
                 return GeneratedResponse(content="{}", input_tokens=1, output_tokens=1)
             gids = [f"g{i:02d}" for i in range(1, len(_many_groups()) + 1)]
@@ -371,10 +377,12 @@ async def test_repair_is_budgeted_for_the_number_of_titles_it_must_fix():
             )
 
     groups = _many_groups()
+    requested_sampling = SamplingParameters(temperature=1.0, top_p=0.95, top_k=64)
     await name_groups(
         groups,
         PlannerInputs(repo_name="r", production_files=[m for g in groups for m in g.members]),
         provider=SectionsOnly(),
+        sampling=requested_sampling,
     )
 
     assert len(seen) == 2, "repair did not run after a response that named nothing"
@@ -382,6 +390,53 @@ async def test_repair_is_budgeted_for_the_number_of_titles_it_must_fix():
         f"repair asked for {seen[1]} tokens to rename {len(groups)} groups, "
         "which truncates and leaves every title path-derived"
     )
+    assert seen_sampling == [requested_sampling, requested_sampling]
+    assert '`target` value' in seen_user_prompts[1]
+    assert '"areas": {"a01": "...", "a02": "..."}' in seen_user_prompts[1]
+
+
+async def test_repair_rejects_incomplete_multi_area_receipt():
+    group = ConceptGroup(
+        members=[
+            "src/api/handler.py",
+            "src/api/routes.py",
+            "src/storage/repository.py",
+            "src/storage/models.py",
+        ],
+        dirs=["src/api", "src/storage"],
+        target_path="src/api",
+    )
+
+    class IncompleteReceipt(MockProvider):
+        async def generate(self, system_prompt: str = "", user_prompt: str = "", **kwargs):
+            if "GROUPS TO RENAME" in user_prompt:
+                payload = {
+                    "names": {
+                        "g01": {
+                            "title": "Integrated Request Storage",
+                            "scope": "Covers request handling and storage coordination.",
+                            "areas": {"a01": "Handles incoming requests."},
+                        }
+                    }
+                }
+            else:
+                payload = {
+                    "sections": [{"title": "Core", "groups": ["g01"]}],
+                    "names": {},
+                }
+            return GeneratedResponse(
+                content=json.dumps(payload),
+                input_tokens=1,
+                output_tokens=1,
+            )
+
+    outline, _ = await name_groups(
+        [group],
+        PlannerInputs(repo_name="r", production_files=group.members),
+        provider=IncompleteReceipt(),
+    )
+
+    assert outline.pages[0].title != "Integrated Request Storage"
 
 
 def _many_groups() -> list[ConceptGroup]:

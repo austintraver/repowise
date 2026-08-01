@@ -12,7 +12,12 @@ import pytest
 pytest.importorskip("openai", reason="openai SDK not installed")
 
 from repowise.core.providers.llm import openrouter as openrouter_module
-from repowise.core.providers.llm.base import GeneratedResponse, ProviderError, RateLimitError
+from repowise.core.providers.llm.base import (
+    GeneratedResponse,
+    ProviderError,
+    RateLimitError,
+    SamplingParameters,
+)
 from repowise.core.providers.llm.openrouter import OpenRouterProvider
 
 # ---------------------------------------------------------------------------
@@ -220,7 +225,12 @@ async def test_generate_sends_correct_messages():
     with patch("openai.AsyncOpenAI") as mock_client:
         mock_client.return_value.chat.completions.create = fake_create
         provider._client = mock_client.return_value
-        await provider.generate("system msg", "user msg", max_tokens=2048, temperature=0.5)
+        await provider.generate(
+            "system msg",
+            "user msg",
+            max_tokens=2048,
+            sampling=SamplingParameters(temperature=0.5),
+        )
 
     kw = captured_kwargs[0]
     assert kw["model"] == "google/gemini-3.1-flash-lite-preview"

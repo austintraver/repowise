@@ -14,6 +14,7 @@ from repowise.server.mcp_server.tool_answer import dials
 from repowise.server.mcp_server.tool_answer.config import (
     _GATED_EXCERPT_CHARS,
     _SYNTHESIS_MAX_TOKENS,
+    _SYNTHESIS_TEMPERATURE,
 )
 
 
@@ -21,6 +22,9 @@ from repowise.server.mcp_server.tool_answer.config import (
 def _clean_env(monkeypatch):
     monkeypatch.delenv("REPOWISE_ANSWER_EXCERPT_CHARS", raising=False)
     monkeypatch.delenv("REPOWISE_ANSWER_MAX_TOKENS", raising=False)
+    monkeypatch.delenv("REPOWISE_ANSWER_TEMPERATURE", raising=False)
+    monkeypatch.delenv("REPOWISE_ANSWER_TOP_P", raising=False)
+    monkeypatch.delenv("REPOWISE_ANSWER_TOP_K", raising=False)
 
 
 def _write_config(tmp_path, **keys):
@@ -35,6 +39,9 @@ def _write_config(tmp_path, **keys):
 def test_defaults_are_the_config_constants():
     assert dials.answer_excerpt_chars(None) == _GATED_EXCERPT_CHARS
     assert dials.answer_max_tokens(None) == _SYNTHESIS_MAX_TOKENS
+    assert dials.answer_sampling_parameters(None).configured() == {
+        "temperature": _SYNTHESIS_TEMPERATURE
+    }
 
 
 def test_env_overrides_and_clamps(monkeypatch):
@@ -52,15 +59,44 @@ def test_garbage_env_falls_through_to_default(monkeypatch):
 
 
 def test_config_yaml_keys_are_honored(tmp_path):
-    repo = _write_config(tmp_path, answer_excerpt_chars=3000, answer_max_tokens=2048)
+    repo = _write_config(
+        tmp_path,
+        answer_excerpt_chars=3000,
+        answer_max_tokens=2048,
+        answer_temperature=1.0,
+        answer_top_p=0.95,
+        answer_top_k=64,
+    )
     assert dials.answer_excerpt_chars(repo) == 3000
     assert dials.answer_max_tokens(repo) == 2048
+    assert dials.answer_sampling_parameters(repo).configured() == {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 64,
+    }
 
 
 def test_env_outranks_config_yaml(tmp_path, monkeypatch):
-    repo = _write_config(tmp_path, answer_excerpt_chars=3000)
+    repo = _write_config(tmp_path, answer_excerpt_chars=3000, answer_temperature=0.4)
     monkeypatch.setenv("REPOWISE_ANSWER_EXCERPT_CHARS", "6000")
+    monkeypatch.setenv("REPOWISE_ANSWER_TEMPERATURE", "0.8")
     assert dials.answer_excerpt_chars(repo) == 6000
+    assert dials.answer_sampling_parameters(repo).temperature == 0.8
+
+
+@pytest.mark.parametrize(
+    ("env_name", "bad_value"),
+    [
+        pytest.param("REPOWISE_ANSWER_TEMPERATURE", "-1", id="temperature"),
+        pytest.param("REPOWISE_ANSWER_TOP_P", "1.1", id="top-p"),
+        pytest.param("REPOWISE_ANSWER_TOP_K", "2.5", id="top-k"),
+    ],
+)
+def test_invalid_answer_sampling_is_rejected_exactly(monkeypatch, env_name, bad_value):
+    monkeypatch.setenv(env_name, bad_value)
+
+    with pytest.raises(ValueError):
+        dials.answer_sampling_parameters(None)
 
 
 def test_word_target_tracks_the_budget():

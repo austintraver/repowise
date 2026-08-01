@@ -40,6 +40,7 @@ from repowise.core.providers.llm.base import (
     ProviderError,
     ProviderModelOption,
     RateLimitError,
+    SamplingParameters,
     ensure_reasoning_supported,
     fallback_model_option,
     normalize_stop_reason,
@@ -47,6 +48,7 @@ from repowise.core.providers.llm.base import (
     provider_retry_stop,
     provider_retry_wait,
     provider_should_retry,
+    sampling_usage,
 )
 from repowise.core.rate_limiter import RateLimiter
 from repowise.core.reasoning import ReasoningMode
@@ -131,13 +133,12 @@ def _ollama_model_options(
 class OllamaProvider(BaseProvider):
     """Ollama provider for local, offline LLM inference.
 
-    Uses Ollama's OpenAI-compatible endpoint. No API key required.
+    Uses Ollama's native chat endpoint. No API key required.
 
     Args:
         model:        Ollama model name (e.g., 'qwen3.5:4b', 'llama3.2').
                       Must be pulled first: `ollama pull <model>`
         base_url:     Ollama server URL. Defaults to http://localhost:11434.
-                      The /v1 suffix is appended automatically if missing.
         rate_limiter: Optional RateLimiter (useful when running multiple
                       concurrent requests against a resource-constrained machine).
     """
@@ -146,6 +147,10 @@ class OllamaProvider(BaseProvider):
     # a load from disk on top. Two minutes covers a mid-size local model on a
     # laptop; the 30s default cancels one before it finishes warming up.
     interactive_timeout_s: float = 120.0
+    # Non-interactive documentation calls previously used OpenAI's 600-second
+    # read timeout. Keep that separate from the shorter answer-synthesis budget:
+    # local page generation can legitimately take several minutes.
+    generation_timeout_s: float = 600.0
 
     def __init__(
         self,
@@ -154,9 +159,9 @@ class OllamaProvider(BaseProvider):
         rate_limiter: RateLimiter | None = None,
     ) -> None:
         resolved_base_url = base_url or os.environ.get("OLLAMA_BASE_URL") or _DEFAULT_BASE_URL
-        self._base_url = resolved_base_url.rstrip("/")
+        self._base_url = resolved_base_url.rstrip("/").removesuffix("/v1")
         self._client = AsyncOpenAI(
-            api_key="ollama", base_url=_normalize_base_url(resolved_base_url)
+            api_key="ollama", base_url=_normalize_base_url(self._base_url)
         )
         self._model = model
         self._rate_limiter = rate_limiter
@@ -180,7 +185,7 @@ class OllamaProvider(BaseProvider):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int = 4096,
-        temperature: float = 0.3,
+        sampling: SamplingParameters = SamplingParameters(),  # noqa: B008
         request_id: str | None = None,
         reasoning: ReasoningMode = "auto",
         cache_hints: tuple = (),
@@ -191,8 +196,8 @@ class OllamaProvider(BaseProvider):
             reasoning,
             _OLLAMA_REASONING_MODES,
             detail=(
-                "Ollama maps reasoning='off' to reasoning_effort='none' "
-                "through its OpenAI-compatible chat completions API."
+                "Ollama maps reasoning='off' to think=false through its "
+                "native chat API."
             ),
         )
         if self._rate_limiter:
@@ -210,7 +215,7 @@ class OllamaProvider(BaseProvider):
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
-                temperature=temperature,
+                sampling=sampling,
                 request_id=request_id,
                 reasoning=reasoning_mode,
             )
@@ -249,22 +254,48 @@ class OllamaProvider(BaseProvider):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int,
-        temperature: float,
+        sampling: SamplingParameters,
         request_id: str | None,
         reasoning: ReasoningMode,
     ) -> GeneratedResponse:
+        import httpx
+
+        outbound = sampling.configured()
+        options: dict[str, float | int] = {
+            "num_predict": max_tokens,
+            **outbound,
+        }
+        request_payload: dict[str, Any] = {
+            "model": self._model,
+            "stream": False,
+            "options": options,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+        if reasoning == "off":
+            request_payload["think"] = False
         try:
-            request_kwargs: dict[str, Any] = {
-                "model": self._model,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-            }
-            request_kwargs.update(_ollama_reasoning_kwargs(reasoning))
-            response = await self._client.chat.completions.create(**request_kwargs)
+            timeout = httpx.Timeout(self.generation_timeout_s, connect=5.0)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    f"{self._base_url}/api/chat",
+                    json=request_payload,
+                )
+                response.raise_for_status()
+            response_data = response.json()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 429:
+                raise RateLimitError(
+                    "ollama",
+                    str(exc),
+                    status_code=429,
+                    retry_after=parse_retry_after(exc.response.headers),
+                ) from exc
+            raise ProviderError("ollama", str(exc), status_code=exc.response.status_code) from exc
+        except httpx.HTTPError as exc:
+            raise ProviderError("ollama", str(exc), status_code=503) from exc
         except _OpenAIRateLimitError as exc:
             raise RateLimitError(
                 "ollama",
@@ -281,19 +312,21 @@ class OllamaProvider(BaseProvider):
                 "ollama", str(exc), status_code=getattr(exc, "status_code", None)
             ) from exc
 
-        usage = response.usage
-        choice = response.choices[0]
-        stop_reason, provider_stop_reason = normalize_stop_reason(choice.finish_reason)
+        input_tokens = int(response_data.get("prompt_eval_count", 0) or 0)
+        output_tokens = int(response_data.get("eval_count", 0) or 0)
+        stop_reason, provider_stop_reason = normalize_stop_reason(response_data.get("done_reason"))
+        message = response_data.get("message") or {}
         result = GeneratedResponse(
-            content=choice.message.content or "",
-            input_tokens=usage.prompt_tokens if usage else 0,
-            output_tokens=usage.completion_tokens if usage else 0,
+            content=str(message.get("content") or ""),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             cached_tokens=0,
             stop_reason=stop_reason,
             provider_stop_reason=provider_stop_reason,
             usage={
-                "prompt_tokens": usage.prompt_tokens if usage else 0,
-                "completion_tokens": usage.completion_tokens if usage else 0,
+                "prompt_tokens": input_tokens,
+                "completion_tokens": output_tokens,
+                **sampling_usage(outbound, outbound),
             },
         )
         log.debug(

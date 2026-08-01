@@ -27,7 +27,7 @@ never reaches the page type it appears to govern.
 |---|---|---|
 | `top_symbol_percentile` | 0.10 | Fraction of public symbols, PageRank-first, getting a spotlight page. **[V]** |
 | `max_file_pages` | unset | Unset = size policy (ceiling ~4500); 0 = one page per file; N = hard cap. **[V]** |
-| `file_page_min_symbols` | 1 | Floor for a file to earn a page. **[V]** |
+| `file_page_min_symbols` | 1 | Retained configuration for `_is_significant_file`, whose only production definition has no production caller. It does not currently decide whether a file earns a page. **[V]** |
 | `_MIN_STOPS` (guided_tour) | 2 | Below this the guided tour page is not emitted at all. **[V]** |
 | `coverage_pct` | 0.20 | Carried by the server's ranked-generate request into selection config, but selection reportedly never reads it. **[I]** — verify before trusting. |
 | `max_pages_pct` | 0.20 | Retained as an internal config field and reportedly written beside `coverage_pct`, but read by no production code. **[I]** — verify before trusting. |
@@ -42,12 +42,16 @@ never reaches the page type it appears to govern.
   The `ContextAssembler` class docstring claims every assembly method stays
   under `config.token_budget` and names a nonexistent `_assemble_with_budget`
   method. **That docstring is false.** **[V]**
-- File-page budget is a strict priority waterfall **[V]**: 800 tokens reserved
-  for knowledge-graph context → path + 5 → public symbol signatures while
-  budget remains → private-documented → private-undocumented → imports
-  (all-or-nothing) → **source code gets the remainder**.
-- If source exceeds both the remainder and `large_file_source_pct × budget`, it
-  is replaced by a synthesized structural outline rather than truncated. **[V]**
+- File-page assembly computes a strict priority waterfall **[V]**: 800 tokens
+  reserved for knowledge-graph context → path + 5 → public symbol signatures
+  while budget remains → private-documented → private-undocumented → imports
+  (all-or-nothing) → source code gets the remainder. The resulting
+  `file_source_snippet` has no production Python or template consumer, so this
+  computation does not currently change rendered file-page content. **[V]**
+- If source exceeds both the remainder and `large_file_source_pct × budget`,
+  the unused `file_source_snippet` is replaced by a synthesized structural
+  outline rather than truncated. The dial therefore has no live output
+  consumer. **[V]**
 - Module pages are bounded only by fixed counts **[V]**: top 10 files by
   PageRank, 5 heritage entries per file, 10 key classes, each file summary cut
   to `dependency_summary_chars`.
@@ -59,7 +63,7 @@ never reaches the page type it appears to govern.
 |---|---|---|
 | `STORED_SNIPPET_CHARS` = 2000 | `vector_store/lancedb_store.py` | LanceDB's stored-prefix width, which controls how deep into a page a vector hit can point and how wide a dependency-summary read it can serve. Pgvector and the in-memory store hold whole pages. **[V]** |
 | `_extract_summary` default 320 | `page_generator/helpers.py` | Produces `Page.summary`, which is **full-text indexed in both backends** (`PAGE_FTS_COLUMNS`, `PG_FTS_EXPRESSION`) — it decides whether a page is *findable*. **[V]** |
-| `EMBED_TEXT_MAX_CHARS` = 30000 | `vector_store/_base.py` | The text that gets vectorized is truncated here while the full page is still stored, so a very long page is searchable only by its first 30k chars. **[V]** |
+| `EMBED_TEXT_MAX_CHARS` = 30000 | `vector_store/_base.py` | The base batch helpers truncate text before embedding, but each concrete store's direct `embed_and_upsert` path bypasses those helpers. The cap is not a universal vectorization limit. **[V]** |
 | `EMBED_BATCH_MAX_ITEMS` = 16 | same | Items per embedder request. **[V]** |
 | `GUIDED_TOUR_SUMMARY_CHARS` = 240 | `generation/models.py` | Blurb under each guided-tour stop. **[V]** |
 | `summary_reservoir_chars` | property on `GenerationConfig` | `max(dial, 240)` — the shared in-run buffer both consumers cut from. **[V]** |
@@ -76,10 +80,12 @@ never reaches the page type it appears to govern.
 | `_GRAPH_EXPAND_TOP_N`/`MAX_NEW`/`DAMPING` = 2/3/0.7 | Pull neighbours of strong hits in at 70% confidence, capped so a hub file can't flood the set. **[V]** |
 
 ### What an MCP agent receives
-`context_token_budget` 8000 (clamped 1000–25000), `answer_max_tokens` 1024
-(clamped 256–8192, word target scales 150–400), `answer_excerpt_chars` 1500,
-`_EMBED_TIMEOUT_S` 8.0. **[V]** that these exist and their clamps are
-documented; **[I]** that CONFIG.md's numbers match the code — not re-verified.
+`context_token_budget` 8000 is validated within 1000–25000 and then clamped
+again to the MCP host output fraction; under the default host cap its effective
+maximum is 15000. `answer_max_tokens` 1024 is clamped 256–8192, but the answer
+word target remains 150–400 throughout 256–1024 because its upper target has a
+400-word floor. `answer_excerpt_chars` is 1500 and `_EMBED_TIMEOUT_S` is 8.0.
+**[V]**
 
 ### What repowise claims it saved you
 `mcp_server/_savings/counterfactual.py` holds ~15 token floors
@@ -162,9 +168,10 @@ All **[V]** — each was reproduced before fixing and re-checked after.
    markdown boilerplate when read back from the store — reported different on
    400/400 real pages. A warm-store run and a cold-store run are therefore not
    the same experiment.
-5. Sampling configuration for documentation and answers is designed but not
-   implemented. The experiment policy is settled; the policy and defaults for
-   an eventual upstream pull request remain open. See section 7. **[V]**
+5. Sampling configuration for documentation and answers is implemented on
+   `codex/configure-sampling`; the experiment policy is settled, while the
+   policy and defaults for an eventual upstream pull request remain open. See
+   section 7. **[V]**
 
 ---
 
@@ -206,11 +213,12 @@ Three practices that would have caught all of them:
 
 ---
 
-## 7. Sampling configuration design — not implemented
+## 7. Sampling configuration design and implementation
 
-This section records the design for adding configurable `temperature`,
-`top_p`, and `top_k`. No production code, branch reference, seal, or model run
-was changed while reaching it. **[V]**
+This section records the design and implementation of configurable
+`temperature`, `top_p`, and `top_k`. The design was committed before production
+changes began so the experiment contract stayed reviewable on its own. No model
+candidate was run while implementing it. **[V]**
 
 ### Scope and settled experiment policy
 
@@ -239,15 +247,15 @@ was changed while reaching it. **[V]**
   temperatures remain `0.3` and `0.2`. The bakeoff does not depend on that
   choice because it pins all three documentation values. **[V]**
 
-### Why this is not three fields in one dataclass
+### State before this branch
 
-- `GenerationConfig` currently exposes only `temperature`, with a default of
-  `0.3`; `BaseProvider.generate` also accepts only `temperature`. **[V]**
-- Concept outline naming and repair bypass that configuration with
-  `temperature=0.2`. Knowledge graph layer naming and tour generation use
-  fixed `temperature=0.3`. Answer synthesis uses a separate fixed
+- `GenerationConfig` exposed only `temperature`, with a default of `0.3`;
+  `BaseProvider.generate` also accepted only `temperature`. **[V]**
+- Concept outline naming and repair bypassed that configuration with
+  `temperature=0.2`. Knowledge graph layer naming and tour generation used
+  fixed `temperature=0.3`. Answer synthesis used a separate fixed
   `_SYNTHESIS_TEMPERATURE=0.2`. **[V]**
-- `OllamaProvider.generate` currently sends requests through Ollama's
+- `OllamaProvider.generate` sent requests through Ollama's
   OpenAI compatible chat completions endpoint. Ollama documents
   `temperature` and `top_p` on that endpoint but not `top_k`; its native
   `/api/chat` request accepts runtime generation options, and Ollama documents
@@ -267,44 +275,42 @@ was changed while reaching it. **[V]**
   [Claude Messages restrictions](https://platform.claude.com/docs/en/build-with-claude/working-with-messages).
   **[V]**
 
-The provider interface should carry one immutable `SamplingParameters` value
+The provider interface now carries one immutable `SamplingParameters` value
 with optional `temperature`, `top_p`, and `top_k` fields. `None` means that the
-field was not configured and should be omitted. Each provider must validate the
-configured values for its selected model and reasoning mode before sending the
-request. The experiment branch rejects an unsupported value;
-the pending upstream policy may later replace that rejection with an explicit
-warning. **[V]**
+field was not configured and is omitted. Each provider validates the configured
+values for its selected model and reasoning mode before sending the request.
+The experiment branch rejects an unsupported value; the pending upstream policy
+may later replace that rejection with an explicit warning. **[V]**
 
-### Required production changes
+### Implemented production changes
 
-1. Add the documentation fields to `GenerationConfig`, parse and validate
-   them, and include them in job snapshots. Add the three independent answer
-   settings to the answer dial resolver. **[V]**
-2. Extend `BaseProvider.generate` and every concrete provider. Providers that
-   can transmit a field must send it unchanged; providers that cannot must
-   report that fact rather than silently accepting it. `MockProvider` must
-   record all three so tests can observe forwarding. **[V]**
-3. Move `OllamaProvider.generate` to native `/api/chat`, mapping `max_tokens`
-   to `num_predict` and the three sampling values into `options`. Preserve the
+1. The documentation fields are parsed and validated by `GenerationConfig`,
+   and outbound and effective values are included in job snapshots. The answer
+   dial resolver owns the three independent answer settings. **[V]**
+2. `BaseProvider.generate` and every concrete provider accept the shared value.
+   Providers that can transmit a field send it unchanged; providers that cannot
+   report that fact rather than silently accepting it. `MockProvider` records
+   all three so tests can observe forwarding. **[V]**
+3. `OllamaProvider.generate` uses native `/api/chat`, mapping `max_tokens`
+   to `num_predict` and the three sampling values into `options`. It preserves the
    existing retry, token accounting, reasoning, timeout, and cost recording
    behavior. **[V]**
-4. Forward the documentation settings through page generation,
-   concept outline naming and repair, and knowledge graph enrichment. Forward
-   the independent answer settings into synthesis. **[V]**
-5. Replace page reuse's identity based only on the prompt with one canonical
+4. The documentation settings reach page generation, concept outline naming
+   and repair, and knowledge graph enrichment. The independent answer settings
+   reach synthesis. **[V]**
+5. Page reuse uses one canonical
    generation request fingerprint shared by persistent reuse and the in-memory
-   cache. It must include provider, model, system and user prompts, maximum
+   cache. It includes provider, model, system and user prompts, maximum
    output tokens, all three sampling values, reasoning, and the existing source
-   salt. The current persistent check compares only model plus a hash of the
-   user prompt and salt. **[V]**
-6. Resolve answer generation settings before the answer cache lookup. Its
-   identity must include provider, model, scope, excerpt width, maximum output
+   salt. **[V]**
+6. Answer generation settings are resolved before the answer cache lookup. Its
+   identity includes provider, model, scope, excerpt width, maximum output
    tokens, all three answer sampling values, prompt/schema version, and a wiki
-   content revision. The current table is uniquely keyed by repository and
-   normalized question hash, and the read path does not use its stored provider
-   or model to decide reuse. **[V]**
-7. Add the baseline configuration digest and candidate protocol digest to the
-   bakeoff seal. `doctor` must compare the seal with the harness, restored
+   content revision. Deterministic value extraction and the optional legacy
+   abstain mode defer this setup and skip the early cache read because they may
+   return without any model call. **[V]**
+7. The bakeoff seal records the baseline configuration digest and candidate
+   protocol digest. `doctor` compares the seal with the harness, restored
    configuration, model artifact, and frozen outline. Each run must record its
    requested sampling values and the actual outbound fields. **[V]**
 
@@ -339,3 +345,24 @@ Passing tests alone are not sufficient. Before the branch is accepted:
    `temperature=1.0`, `top_p=0.95`, and `top_k=64` at the daemon boundary.
    Comparing generated prose cannot prove that a sampling field was honored.
    **[V]**
+
+### Verification completed on the feature branch
+
+- Removing documentation sampling from page generation, concept naming,
+  concept repair, knowledge graph layer naming, or tour generation turns the
+  corresponding focused test red. **[V]**
+- Omitting `temperature`, `top_p`, or `top_k` from the page fingerprint turns
+  the persistent reuse test red for that field. Omitting any of the three from
+  the native Ollama request turns its request capture test red. **[V]**
+- Removing answer sampling from the final synthesis call or omitting any of the
+  three fields from answer cache identity turns its focused test red. **[V]**
+- Changing the sealed baseline sampling or removing the four required Ollama
+  daemon settings from protocol identity turns the bakeoff tests red. **[V]**
+- A live native request to the installed `gemma4:12b-it-q4_K_M` returned
+  `OK.` and the Ollama daemon recorded `top_k = 64`, `top_p = 0.950`, and
+  `temp = 1.000` for that request. **[V]**
+- Adversarial review found and fixed a 120 second documentation timeout
+  regression introduced by the native Ollama transport, a missing
+  answer forwarding assertion, inconsistent area identifiers in
+  the concept repair prompt, legacy `/v1` base URL handling, and provider
+  resolution on two answer paths that do not call a model. **[V]**

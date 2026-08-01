@@ -22,6 +22,8 @@ from typing import Any
 
 import structlog
 
+from repowise.core.providers.llm.base import SamplingParameters
+
 from .grouping import ConceptGroup, GroupingParams, group_files, params_for
 from .models import ConceptOutline, ConceptPage, ConceptSection, OutlineReport
 from .naming import (
@@ -29,12 +31,14 @@ from .naming import (
     SYSTEM_PROMPT,
     NamedGroup,
     _humanise,
+    build_group_areas,
     build_payload,
     decode_response,
     deterministic_scope,
     deterministic_title,
     disambiguate_titles,
     ground_scopes,
+    has_complete_area_receipt,
     parse_json_object,
 )
 from .validation import validate_outline
@@ -223,7 +227,11 @@ The title is {min_words} to {max_words} words, names the capability rather than 
 the directory or the layer, and is unique across the whole outline.
 
 The scope is a full English sentence saying what the page covers and what it \
-deliberately does not. It is never a path: do not echo the `dir` value back.
+deliberately does not. It is never a path: do not echo the `target` value back.
+
+Each group carries an `areas` list. Return an `areas` object keyed by every \
+area id in that list, with one non-empty phrase saying how that area contributes \
+to the title. Do not omit an area even when the group spans several directories.
 
 Titles already in use elsewhere in the outline (do not reuse any of these):
 {taken}
@@ -232,7 +240,8 @@ GROUPS TO RENAME:
 {failures}
 
 Return ONLY this JSON:
-{{"names": {{"g07": {{"title": "...", "scope": "..."}}, ...}}}}
+{{"names": {{"g07": {{"title": "...", "scope": "...", \
+"areas": {{"a01": "...", "a02": "..."}}}}, ...}}}}
 """
 
 
@@ -304,6 +313,7 @@ async def plan_outline(
     params: GroupingParams | None = None,
     repair: bool = True,
     reasoning: str | None = None,
+    sampling: SamplingParameters | None = None,
 ) -> tuple[ConceptOutline, OutlineReport]:
     """Group *inputs* and produce a validated outline over that grouping."""
     groups = group_files(inputs.production_files, layer_of_file=inputs.layer_of_file, params=params)
@@ -315,6 +325,7 @@ async def plan_outline(
         params=params,
         repair=repair,
         reasoning=reasoning,
+        sampling=sampling,
     )
 
 
@@ -327,6 +338,7 @@ async def name_groups(
     params: GroupingParams | None = None,
     repair: bool = True,
     reasoning: str | None = None,
+    sampling: SamplingParameters | None = None,
 ) -> tuple[ConceptOutline, OutlineReport]:
     """Name and section an already-computed partition, then validate it.
 
@@ -340,6 +352,7 @@ async def name_groups(
     """
     all_files = set(inputs.production_files)
     resolved = params or params_for(len(all_files))
+    resolved_sampling = sampling or SamplingParameters(temperature=0.2)
 
     if deterministic or provider is None:
         outline = name_deterministically(groups, inputs)
@@ -393,7 +406,7 @@ async def name_groups(
                 system_prompt=SYSTEM_PROMPT,
                 user_prompt=instructions + body,
                 max_tokens=16000,
-                temperature=0.2,
+                sampling=resolved_sampling,
                 **_reasoning_kwargs(reasoning),
             )
         data = parse_json_object(getattr(response, "content", "") or "")
@@ -429,7 +442,14 @@ async def name_groups(
     if repair:
         targets = _repair_targets(outline, report)
         if targets:
-            await _repair_titles(outline, index, targets, provider=provider, reasoning=reasoning)
+            await _repair_titles(
+                outline,
+                index,
+                targets,
+                provider=provider,
+                reasoning=reasoning,
+                sampling=resolved_sampling,
+            )
             # Repair writes new prose, so it has to face the same citation
             # check the first pass did. Grounding after the last write rather
             # than after the first is the difference between checking the page
@@ -481,6 +501,7 @@ async def _repair_titles(
     *,
     provider: Any,
     reasoning: str | None = None,
+    sampling: SamplingParameters | None = None,
 ) -> None:
     """Re-ask for just the failing titles, then apply only what improved.
 
@@ -506,6 +527,7 @@ async def _repair_titles(
                     "dir": page.target_path,
                     "files": len(page.members),
                     "names": names,
+                    "areas": build_group_areas(page.group),
                 },
                 separators=(",", ":"),
             )
@@ -531,7 +553,7 @@ async def _repair_titles(
                 system_prompt=SYSTEM_PROMPT,
                 user_prompt=prompt,
                 max_tokens=budget,
-                temperature=0.2,
+                sampling=sampling or SamplingParameters(temperature=0.2),
                 **_reasoning_kwargs(reasoning),
             )
         data = parse_json_object(getattr(response, "content", "") or "")
@@ -547,7 +569,7 @@ async def _repair_titles(
     for page in failing:
         gid = gid_of.get(page.structural_key, "")
         entry = names.get(gid)
-        if not isinstance(entry, dict):
+        if not isinstance(entry, dict) or not has_complete_area_receipt(entry, page.group):
             continue
         title = str(entry.get("title") or "").strip()
         words = len(title.split())

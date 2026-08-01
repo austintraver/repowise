@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from repowise.core.providers.llm.base import SamplingParameters
 from repowise.core.reasoning import ReasoningMode, normalize_reasoning
 
 # ---------------------------------------------------------------------------
@@ -88,6 +89,8 @@ class GenerationConfig:
     Attributes:
         max_tokens:               Max tokens in LLM completion.
         temperature:              Sampling temperature (0.3 for consistent docs).
+        top_p:                    Optional nucleus-sampling probability.
+        top_k:                    Optional number of highest-probability tokens.
         token_budget:             Context tokens fed to LLM (not output).
         dependency_summary_chars: Chars of each key file's summary shown on its
                                   module page — how much the model reads about
@@ -107,6 +110,8 @@ class GenerationConfig:
 
     max_tokens: int = DEFAULT_MAX_TOKENS
     temperature: float = DEFAULT_TEMPERATURE
+    top_p: float | None = None
+    top_k: int | None = None
     token_budget: int = 48000
     dependency_summary_chars: int = 200
     max_concurrency: int = 12
@@ -273,11 +278,29 @@ class GenerationConfig:
             raise ValueError("harvest_decisions must be a boolean")
 
         temperature = normalize_temperature(config.get("temperature", DEFAULT_TEMPERATURE))
+        raw_top_p = config.get("top_p")
+        if isinstance(raw_top_p, str):
+            try:
+                raw_top_p = float(raw_top_p)
+            except ValueError as exc:
+                raise ValueError("top_p must be a finite number") from exc
+        raw_top_k = config.get("top_k")
+        if isinstance(raw_top_k, str):
+            if not raw_top_k.strip().isdigit():
+                raise ValueError("top_k must be a positive integer")
+            raw_top_k = int(raw_top_k)
+        sampling = SamplingParameters(
+            temperature=temperature,
+            top_p=raw_top_p,
+            top_k=raw_top_k,
+        )
 
         values = {
             "max_tokens": max_tokens,
             "harvest_decisions": harvest_decisions,
-            "temperature": temperature,
+            "temperature": sampling.temperature,
+            "top_p": sampling.top_p,
+            "top_k": sampling.top_k,
             **overrides,
         }
         for key in ("token_budget", "dependency_summary_chars"):
@@ -320,7 +343,14 @@ class GenerationConfig:
             or self.dependency_summary_chars <= 0
         ):
             raise ValueError("dependency_summary_chars must be a positive integer")
-        object.__setattr__(self, "temperature", normalize_temperature(self.temperature))
+        sampling = SamplingParameters(
+            temperature=normalize_temperature(self.temperature),
+            top_p=self.top_p,
+            top_k=self.top_k,
+        )
+        object.__setattr__(self, "temperature", sampling.temperature)
+        object.__setattr__(self, "top_p", sampling.top_p)
+        object.__setattr__(self, "top_k", sampling.top_k)
         if self.embed_concurrency is None:
             object.__setattr__(self, "embed_concurrency", self.max_concurrency)
         object.__setattr__(self, "reasoning", normalize_reasoning(self.reasoning))
@@ -337,6 +367,16 @@ class GenerationConfig:
         not editing the writers.
         """
         return max(self.dependency_summary_chars, GUIDED_TOUR_SUMMARY_CHARS)
+
+    @property
+    def sampling_parameters(self) -> SamplingParameters:
+        """Sampling values requested for every model-written documentation call."""
+
+        return SamplingParameters(
+            temperature=self.temperature,
+            top_p=self.top_p,
+            top_k=self.top_k,
+        )
 
 
 # ---------------------------------------------------------------------------

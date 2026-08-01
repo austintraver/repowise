@@ -14,10 +14,13 @@ synthesis prompts whose word target must track the resolved budget.
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
+from repowise.core.providers.llm.base import SamplingParameters
 from repowise.server.mcp_server.tool_answer.config import (
     _GATED_EXCERPT_CHARS,
     _SYNTHESIS_MAX_TOKENS,
+    _SYNTHESIS_TEMPERATURE,
     _SYSTEM_PROMPT_TEMPLATE,
     _USER_TEMPLATE,
 )
@@ -30,6 +33,12 @@ _ANSWER_EXCERPT_CHARS_BOUNDS = (200, 20_000)
 _ANSWER_MAX_TOKENS_ENV = "REPOWISE_ANSWER_MAX_TOKENS"
 _ANSWER_MAX_TOKENS_CONFIG_KEY = "answer_max_tokens"
 _ANSWER_MAX_TOKENS_BOUNDS = (256, 8_192)
+_ANSWER_TEMPERATURE_ENV = "REPOWISE_ANSWER_TEMPERATURE"
+_ANSWER_TEMPERATURE_CONFIG_KEY = "answer_temperature"
+_ANSWER_TOP_P_ENV = "REPOWISE_ANSWER_TOP_P"
+_ANSWER_TOP_P_CONFIG_KEY = "answer_top_p"
+_ANSWER_TOP_K_ENV = "REPOWISE_ANSWER_TOP_K"
+_ANSWER_TOP_K_CONFIG_KEY = "answer_top_k"
 
 # The word target scales with the token budget — raising max_tokens without
 # moving the instruction just buys silent headroom — but sublinearly capped:
@@ -105,6 +114,75 @@ def answer_max_tokens(repo_path: Path | str | None = None) -> int:
         _SYNTHESIS_MAX_TOKENS,
         _ANSWER_MAX_TOKENS_BOUNDS,
         repo_path,
+    )
+
+
+def answer_sampling_parameters(
+    repo_path: Path | str | None = None,
+) -> SamplingParameters:
+    """Resolve answer-only sampling without clamping configured values.
+
+    Environment values outrank repository configuration. Unlike the bounded
+    size dials, sampling values are exact request parameters: invalid input
+    raises instead of being silently replaced or clamped.
+    """
+    config: dict[str, Any] = {}
+    if repo_path is not None:
+        config_path = Path(str(repo_path)) / ".repowise" / "config.yaml"
+        try:
+            if config_path.is_file():
+                import yaml
+
+                loaded = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+                if isinstance(loaded, dict):
+                    config = loaded
+        except Exception as exc:
+            raise ValueError(f"Unable to read answer sampling from {config_path}") from exc
+
+    def selected(env_name: str, config_key: str, default: object) -> object:
+        raw_env = os.environ.get(env_name)
+        if raw_env is not None and raw_env.strip():
+            return raw_env.strip()
+        return config.get(config_key, default)
+
+    def optional_float(raw: object, name: str) -> float | None:
+        if raw is None:
+            return None
+        if isinstance(raw, bool):
+            raise ValueError(f"{name} must be a finite number or null")
+        try:
+            return float(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} must be a finite number or null") from exc
+
+    def optional_int(raw: object, name: str) -> int | None:
+        if raw is None:
+            return None
+        if isinstance(raw, bool):
+            raise ValueError(f"{name} must be a positive integer or null")
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, str) and raw.strip().isdigit():
+            return int(raw)
+        raise ValueError(f"{name} must be a positive integer or null")
+
+    return SamplingParameters(
+        temperature=optional_float(
+            selected(
+                _ANSWER_TEMPERATURE_ENV,
+                _ANSWER_TEMPERATURE_CONFIG_KEY,
+                _SYNTHESIS_TEMPERATURE,
+            ),
+            _ANSWER_TEMPERATURE_CONFIG_KEY,
+        ),
+        top_p=optional_float(
+            selected(_ANSWER_TOP_P_ENV, _ANSWER_TOP_P_CONFIG_KEY, None),
+            _ANSWER_TOP_P_CONFIG_KEY,
+        ),
+        top_k=optional_int(
+            selected(_ANSWER_TOP_K_ENV, _ANSWER_TOP_K_CONFIG_KEY, None),
+            _ANSWER_TOP_K_CONFIG_KEY,
+        ),
     )
 
 

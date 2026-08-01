@@ -216,6 +216,7 @@ def _enrich_knowledge_graph(
                 tech_stack=result.tech_stack,
                 generated_pages=generated_pages,
                 reasoning=gen_config.reasoning,
+                sampling=gen_config.sampling_parameters,
             )
         )
 

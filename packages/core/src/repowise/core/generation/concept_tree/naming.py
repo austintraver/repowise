@@ -210,12 +210,15 @@ SYSTEM_PROMPT = (
 
 NAMING_INSTRUCTIONS = """\
 Below is the complete set of file groups for the `{repo}` codebase. The grouping \
-is fixed: every group is a contiguous part of the directory tree, every source \
-file is in exactly one group, and you must not change, merge, split or drop any \
-group.
+is fixed: every source file is in exactly one group, and you must not change, \
+merge, split or drop any group. A group can be one directory subtree or a run \
+of adjacent directory areas combined to avoid tiny pages. `target` is only the \
+page's storage identity; it is not necessarily representative of everything the \
+page covers. Read every entry in `areas` before naming the group.
 
 For EVERY group id, return a title, a one-sentence scope, and the section it \
-belongs to. Then order the sections.
+belongs to. Also return one short capability phrase for every area id, showing \
+that the title and scope account for the whole group. Then order the sections.
 
 TITLES
 - Name the CAPABILITY or SUBSYSTEM, not the directory and not the layer. \
@@ -231,8 +234,15 @@ own word for this, taken from its documentation.
 SCOPE
 - One sentence saying what the page covers AND what it deliberately does not, \
 so that adjacent pages do not describe each other.
+- It must describe every directory area in the group, not just `target`, the \
+first area, or the area with the most recognisable filenames.
 - Refer only to paths that appear in that group's own listing. Do not name a \
 file or directory that is not in the input.
+
+AREA RECEIPT
+- For each name, copy every area id from that group's `areas` object into the \
+returned `areas` object and give it a short phrase saying what that area \
+contributes. Missing an area makes the title unusable.
 
 SECTIONS
 - Group the pages into {min_sections} to {max_sections} sections. Order them as \
@@ -243,7 +253,8 @@ of distance from the engine, then operations, then reference.
 
 Return ONLY this JSON:
 {{"sections": [{{"title": "...", "groups": ["g01", "g07", ...]}}],
-  "names": {{"g01": {{"title": "...", "scope": "..."}}, ...}}}}
+  "names": {{"g01": {{"title": "...", "scope": "...",
+                        "areas": {{"a01": "...", "a02": "..."}}}}, ...}}}}
 
 GROUPS:
 """
@@ -294,6 +305,51 @@ def _common_prefix(dirs: list[str]) -> str:
     return "/".join(common)
 
 
+def build_group_areas(
+    group: ConceptGroup,
+    *,
+    max_filenames_per_area: int = 3,
+) -> list[dict[str, Any]]:
+    """Describe every directory represented by a concept group.
+
+    ``target_path`` exists for page identity and can point at only one place.
+    Naming from it hid the other directories in merged groups. Each directory
+    therefore gets an opaque id, its exact file count, and a bounded sample of
+    basenames. The ids let the response prove that it considered every area
+    without making paths part of the response contract.
+    """
+    members_by_directory: dict[str, list[str]] = {}
+    for member in sorted(group.members):
+        directory, _, filename = member.rpartition("/")
+        members_by_directory.setdefault(directory, []).append(filename)
+
+    areas: list[dict[str, Any]] = []
+    for position, directory in enumerate(sorted(members_by_directory), start=1):
+        filenames = members_by_directory[directory]
+        areas.append(
+            {
+                "id": f"a{position:02d}",
+                "dir": directory or ".",
+                "files": len(filenames),
+                "names": filenames[:max_filenames_per_area],
+            }
+        )
+    return areas
+
+
+def has_complete_area_receipt(entry: dict[str, Any], group: ConceptGroup) -> bool:
+    """Whether a model response accounted for every directory in a merged group."""
+    if len(group.dirs) <= 1:
+        return True
+    receipt = entry.get("areas")
+    if not isinstance(receipt, dict):
+        return False
+    expected = {area["id"] for area in build_group_areas(group)}
+    if set(receipt) != expected:
+        return False
+    return all(isinstance(receipt[area_id], str) and receipt[area_id].strip() for area_id in expected)
+
+
 def build_payload(
     groups: list[ConceptGroup],
     *,
@@ -324,9 +380,10 @@ def build_payload(
         index[gid] = group
         entry: dict[str, Any] = {
             "id": gid,
-            "dir": group.target_path,
+            "target": group.target_path,
             "files": group.file_count,
             "names": _sample_names(group.members, max_filenames),
+            "areas": build_group_areas(group),
         }
         if len(group.dirs) > 1:
             # Relative to what the directories share, not to ``target_path``.
@@ -436,8 +493,9 @@ def decode_response(
         title = _clean_title(entry.get("title"))
         scope = str(entry.get("scope") or "").strip()
         fallback = False
-        if not title:
+        if not title or not has_complete_area_receipt(entry, group):
             title = deterministic_title(group, labels.get(group.dominant_layer, ""))
+            scope = deterministic_scope(group)
             fallback = True
         if not scope:
             scope = deterministic_scope(group)

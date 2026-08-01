@@ -28,12 +28,14 @@ from repowise.core.providers.llm.base import (
     ProviderError,
     ProviderModelOption,
     RateLimitError,
+    SamplingParameters,
     ensure_reasoning_supported,
     fallback_model_option,
     normalize_stop_reason,
     provider_retry_stop,
     provider_retry_wait,
     provider_should_retry,
+    sampling_usage,
 )
 from repowise.core.rate_limiter import RateLimiter
 from repowise.core.reasoning import ReasoningMode, normalize_reasoning
@@ -255,7 +257,7 @@ class GeminiProvider(BaseProvider):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int = 4096,
-        temperature: float = 0.3,
+        sampling: SamplingParameters = SamplingParameters(),  # noqa: B008
         request_id: str | None = None,
         reasoning: ReasoningMode = "auto",
         cache_hints: tuple = (),
@@ -287,7 +289,7 @@ class GeminiProvider(BaseProvider):
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
-                temperature=temperature,
+                sampling=sampling,
                 request_id=request_id,
                 reasoning=reasoning_mode,
             )
@@ -308,7 +310,7 @@ class GeminiProvider(BaseProvider):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int,
-        temperature: float,
+        sampling: SamplingParameters,
         request_id: str | None,
         reasoning: ReasoningMode,
     ) -> GeneratedResponse:
@@ -348,11 +350,12 @@ class GeminiProvider(BaseProvider):
             client = self._client
             try:
                 thinking_config = _gemini_thinking_config(reasoning, genai_types)
+                outbound = sampling.configured()
                 config_kwargs: dict[str, Any] = {
                     "system_instruction": system_prompt,
-                    "temperature": temperature,
                     "max_output_tokens": max_tokens,
                 }
+                config_kwargs.update(outbound)
                 if thinking_config is not None:
                     config_kwargs["thinking_config"] = thinking_config
 
@@ -389,9 +392,10 @@ class GeminiProvider(BaseProvider):
                     "prompt_token_count": getattr(usage, "prompt_token_count", 0) or 0,
                     "candidates_token_count": getattr(usage, "candidates_token_count", 0) or 0,
                     "total_token_count": getattr(usage, "total_token_count", 0) or 0,
+                    **sampling_usage(outbound, {}),
                 }
                 if usage
-                else {},
+                else sampling_usage(outbound, {}),
             )
 
         try:

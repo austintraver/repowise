@@ -729,6 +729,7 @@ async def run_pipeline(
                     repo_structure=repo_structure,
                     tech_stack=tech_stack_dicts,
                     reasoning=_kg_reasoning,
+                    sampling=resolved_generation_config.sampling_parameters,
                 )
             )
 

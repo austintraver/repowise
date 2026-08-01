@@ -14,7 +14,12 @@ pytest.importorskip("anthropic", reason="anthropic SDK not installed")
 from anthropic.types import TextBlock, ThinkingBlock
 
 from repowise.core.providers.llm.anthropic import AnthropicProvider
-from repowise.core.providers.llm.base import GeneratedResponse, ProviderError, RateLimitError
+from repowise.core.providers.llm.base import (
+    GeneratedResponse,
+    ProviderError,
+    RateLimitError,
+    SamplingParameters,
+)
 
 # ---------------------------------------------------------------------------
 # Construction
@@ -173,7 +178,12 @@ async def test_generate_sends_correct_params():
     with patch("anthropic.AsyncAnthropic") as mock_client:
         mock_client.return_value.messages.create = fake_create
         provider._client = mock_client.return_value
-        await provider.generate("system msg", "user msg", max_tokens=1024, temperature=0.1)
+        await provider.generate(
+            "system msg",
+            "user msg",
+            max_tokens=1024,
+            sampling=SamplingParameters(temperature=0.1),
+        )
 
     kw = captured_kwargs[0]
     assert kw["model"] == "claude-haiku-4-5"

@@ -13,6 +13,7 @@ Adding a new provider:
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -22,6 +23,87 @@ from repowise.core.reasoning import ReasoningMode, normalize_reasoning
 
 CacheSegment = Literal["system", "user_prefix"]
 ModelOptionSource = Literal["api", "local", "fallback"]
+
+
+@dataclass(frozen=True)
+class SamplingParameters:
+    """Provider-neutral sampling values for one generation request.
+
+    ``None`` means the caller did not configure that value, so providers must
+    omit it. A configured value must either reach the model unchanged or be
+    rejected explicitly by the selected provider.
+    """
+
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("temperature", self.temperature),
+            ("top_p", self.top_p),
+        ):
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{name} must be a finite number")
+            normalized = float(value)
+            if not math.isfinite(normalized):
+                raise ValueError(f"{name} must be a finite number")
+            object.__setattr__(self, name, normalized)
+
+        if self.temperature is not None and self.temperature < 0:
+            raise ValueError("temperature must be non-negative")
+        if self.top_p is not None and not 0 <= self.top_p <= 1:
+            raise ValueError("top_p must be between 0 and 1")
+        if self.top_k is not None and (
+            isinstance(self.top_k, bool) or not isinstance(self.top_k, int) or self.top_k <= 0
+        ):
+            raise ValueError("top_k must be a positive integer")
+
+    def configured(self) -> dict[str, float | int]:
+        """Return only values the caller explicitly configured."""
+
+        values: dict[str, float | int] = {}
+        if self.temperature is not None:
+            values["temperature"] = self.temperature
+        if self.top_p is not None:
+            values["top_p"] = self.top_p
+        if self.top_k is not None:
+            values["top_k"] = self.top_k
+        return values
+
+
+DEFAULT_SAMPLING_PARAMETERS = SamplingParameters()
+
+
+def reject_sampling_parameters(
+    provider: str,
+    model: str,
+    sampling: SamplingParameters,
+    unsupported: tuple[str, ...],
+) -> None:
+    """Reject configured sampling fields that the selected adapter cannot send."""
+
+    rejected = [name for name in unsupported if getattr(sampling, name) is not None]
+    if rejected:
+        names = ", ".join(rejected)
+        raise ProviderError(
+            provider,
+            f"Model {model!r} cannot accept configured sampling parameter(s): {names}.",
+        )
+
+
+def sampling_usage(
+    outbound: dict[str, float | int],
+    effective: dict[str, float | int] | None = None,
+) -> dict[str, dict[str, float | int]]:
+    """Return the stable request/effective sampling provenance fields."""
+
+    return {
+        "outbound_sampling": dict(outbound),
+        "effective_sampling": dict(effective or {}),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +341,7 @@ class BaseProvider(ABC):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int = 4096,
-        temperature: float = 0.3,
+        sampling: SamplingParameters = DEFAULT_SAMPLING_PARAMETERS,
         request_id: str | None = None,
         reasoning: ReasoningMode = "auto",
         cache_hints: tuple[CacheHint, ...] = (),
@@ -272,8 +354,8 @@ class BaseProvider(ABC):
                            containing the code context and documentation request.
             max_tokens:    Maximum tokens in the completion. Providers may enforce
                            lower limits; the provider should clip, not raise.
-            temperature:   Sampling temperature. 0.0 is fully deterministic.
-                           repowise uses 0.3 for consistent doc style.
+            sampling:      Optional temperature, top-p, and top-k values. Configured
+                           values must be sent unchanged or rejected explicitly.
             request_id:    Optional trace ID for logging and debugging.
             reasoning:     Provider-level reasoning intent. ``auto`` preserves
                            provider defaults; explicit modes are translated by

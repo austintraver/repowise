@@ -23,7 +23,6 @@ from ..models import (
     GENERATION_LEVELS,
     STUB_FALLBACK_ERROR,
     GeneratedPage,
-    compute_source_hash,
 )
 
 log = structlog.get_logger(__name__)
@@ -238,7 +237,7 @@ class PerTypeGenerationMixin:
             page_target,
             title,
             response,
-            compute_source_hash(user_prompt),
+            self.generation_request_fingerprint("module_page", user_prompt),
             GENERATION_LEVELS["module_page"],
         )
         return _stamp_concept(page)
@@ -328,7 +327,7 @@ class PerTypeGenerationMixin:
             repo_name,
             f"Repository Overview: {repo_name}",
             response,
-            compute_source_hash(user_prompt),
+            self.generation_request_fingerprint("repo_overview", user_prompt),
             GENERATION_LEVELS["repo_overview"],
         )
 
@@ -376,7 +375,7 @@ class PerTypeGenerationMixin:
             repo_name,
             f"Architecture Diagram: {repo_name}",
             response,
-            compute_source_hash(user_prompt),
+            self.generation_request_fingerprint("architecture_diagram", user_prompt),
             GENERATION_LEVELS["architecture_diagram"],
         )
 
@@ -443,7 +442,7 @@ class PerTypeGenerationMixin:
             target,
             spec.title,
             response,
-            compute_source_hash(user_prompt + salt),
+            self.generation_request_fingerprint("onboarding", user_prompt, source_salt=salt),
             GENERATION_LEVELS["onboarding"],
         )
         # Subkind discriminator lives in metadata; page_type alone is shared

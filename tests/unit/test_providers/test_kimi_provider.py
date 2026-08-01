@@ -15,6 +15,7 @@ from repowise.core.providers.llm.base import (
     GeneratedResponse,
     ProviderError,
     RateLimitError,
+    SamplingParameters,
 )
 from repowise.core.providers.llm.kimi import KimiProvider
 
@@ -185,7 +186,7 @@ async def test_generate_uses_correct_model_name():
         assert kwargs["model"] == "kimi-for-coding"
 
 
-async def test_kimi_for_coding_pins_sampling_parameters():
+async def test_kimi_for_coding_forwards_sampling_parameters():
     provider = KimiProvider(api_key="sk-test")
     mock_response = _make_mock_chat_response()
 
@@ -196,18 +197,18 @@ async def test_kimi_for_coding_pins_sampling_parameters():
         await provider.generate(
             "system",
             "user",
-            temperature=0.3,
+            sampling=SamplingParameters(temperature=0.3, top_p=0.95),
         )
 
     kwargs = mock_client.return_value.chat.completions.create.call_args.kwargs
-    assert kwargs["temperature"] == 0.6
+    assert kwargs["temperature"] == 0.3
     assert kwargs["top_p"] == 0.95
     assert "presence_penalty" not in kwargs
     assert "frequency_penalty" not in kwargs
     assert "extra_body" not in kwargs
 
 
-async def test_kimi_for_coding_highspeed_pins_sampling_parameters():
+async def test_kimi_for_coding_highspeed_forwards_sampling_parameters():
     provider = KimiProvider(api_key="sk-test", model="kimi-for-coding-highspeed")
     mock_response = _make_mock_chat_response()
 
@@ -215,15 +216,19 @@ async def test_kimi_for_coding_highspeed_pins_sampling_parameters():
         mock_client.return_value.chat.completions.create = AsyncMock(return_value=mock_response)
         provider._client = mock_client.return_value
 
-        await provider.generate("system", "user", temperature=0.3)
+        await provider.generate(
+            "system",
+            "user",
+            sampling=SamplingParameters(temperature=0.3, top_p=0.95),
+        )
 
     kwargs = mock_client.return_value.chat.completions.create.call_args.kwargs
-    assert kwargs["temperature"] == 0.6
+    assert kwargs["temperature"] == 0.3
     assert kwargs["top_p"] == 0.95
     assert "extra_body" not in kwargs
 
 
-async def test_k2_instant_mode_pins_sampling_parameters():
+async def test_k2_instant_mode_forwards_sampling_parameters():
     provider = KimiProvider(api_key="sk-test", model="kimi-k2.6")
     mock_response = _make_mock_chat_response()
 
@@ -234,19 +239,19 @@ async def test_k2_instant_mode_pins_sampling_parameters():
         await provider.generate(
             "system",
             "user",
-            temperature=0.3,
+            sampling=SamplingParameters(temperature=0.3, top_p=0.95),
             reasoning="off",
         )
 
     kwargs = mock_client.return_value.chat.completions.create.call_args.kwargs
-    assert kwargs["temperature"] == 0.6
+    assert kwargs["temperature"] == 0.3
     assert kwargs["top_p"] == 0.95
     assert kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
     assert "presence_penalty" not in kwargs
     assert "frequency_penalty" not in kwargs
 
 
-async def test_k2_thinking_mode_pins_sampling_parameters():
+async def test_k2_thinking_mode_forwards_sampling_parameters():
     provider = KimiProvider(api_key="sk-test", model="kimi-k2.6")
     mock_response = _make_mock_chat_response()
 
@@ -257,12 +262,12 @@ async def test_k2_thinking_mode_pins_sampling_parameters():
         await provider.generate(
             "system",
             "user",
-            temperature=0.3,
+            sampling=SamplingParameters(temperature=0.3, top_p=0.95),
             reasoning="high",
         )
 
     kwargs = mock_client.return_value.chat.completions.create.call_args.kwargs
-    assert kwargs["temperature"] == 1.0
+    assert kwargs["temperature"] == 0.3
     assert kwargs["top_p"] == 0.95
     assert kwargs["extra_body"] == {"thinking": {"type": "enabled"}}
     assert "presence_penalty" not in kwargs
