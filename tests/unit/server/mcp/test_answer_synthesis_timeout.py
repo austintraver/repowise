@@ -14,12 +14,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from repowise.core.providers.llm.base import SamplingParameters
 from repowise.core.providers.llm.registry import _BUILTIN_PROVIDERS, get_provider
 from repowise.server.mcp_server.tool_answer import synthesis as synthesis_module
 from repowise.server.mcp_server.tool_answer.answer import _degraded_payload
 from repowise.server.mcp_server.tool_answer.config import (
     _SYNTHESIS_MAX_TOKENS,
-    _SYNTHESIS_TEMPERATURE,
 )
 from repowise.server.mcp_server.tool_answer.synthesis import (
     _FALLBACK_TIMEOUT_S,
@@ -298,13 +298,19 @@ async def test_the_env_override_reaches_the_call(monkeypatch):
 
 async def test_prompts_and_sampling_are_passed_through_unchanged():
     provider = _SlowProvider(duration=0, budget=30.0)
-    await synthesize(provider, "the system prompt", "the user prompt")
+    requested = SamplingParameters(temperature=1.0, top_p=0.95, top_k=64)
+    await synthesize(
+        provider,
+        "the system prompt",
+        "the user prompt",
+        sampling=requested,
+    )
 
     assert provider.calls[0] == {
         "system_prompt": "the system prompt",
         "user_prompt": "the user prompt",
         "max_tokens": _SYNTHESIS_MAX_TOKENS,
-        "temperature": _SYNTHESIS_TEMPERATURE,
+        "sampling": requested,
     }
 
 

@@ -376,6 +376,7 @@ class _GenerationRun:
                 inputs,
                 provider=provider,
                 reasoning=getattr(self.config, "reasoning", None),
+                sampling=self.config.sampling_parameters,
             )
         except Exception as exc:
             # ``name_groups`` guards the call and the decode itself, so reaching
@@ -741,6 +742,18 @@ class _GenerationRun:
         pages = [r for r in results if isinstance(r, GeneratedPage)]
         if self.job_system is not None and self.job_id is not None:
             for r in pages:
+                has_outbound = "outbound_sampling" in r.metadata
+                has_effective = "effective_sampling" in r.metadata
+                if has_outbound != has_effective:
+                    raise ValueError(
+                        f"Page {r.page_id} carries incomplete sampling provenance"
+                    )
+                if has_outbound and has_effective:
+                    self.job_system.record_sampling(
+                        self.job_id,
+                        outbound_sampling=r.metadata["outbound_sampling"],
+                        effective_sampling=r.metadata["effective_sampling"],
+                    )
                 # Already recorded as failed above. A page cannot be both, and
                 # "completed" is the half a reader would believe.
                 if r.metadata.get(STUB_FALLBACK_ERROR) is None:

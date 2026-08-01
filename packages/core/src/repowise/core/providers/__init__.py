@@ -28,6 +28,7 @@ from repowise.core.providers.llm.base import (
     GeneratedResponse,
     ProviderError,
     RateLimitError,
+    SamplingParameters,
 )
 from repowise.core.providers.llm.registry import get_provider, list_providers, register_provider
 
@@ -40,6 +41,7 @@ __all__ = [
     "GeneratedResponse",
     "ProviderError",
     "RateLimitError",
+    "SamplingParameters",
     # Embedding
     "get_embedder",
     "get_provider",

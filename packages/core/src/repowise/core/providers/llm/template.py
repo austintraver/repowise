@@ -13,7 +13,7 @@ would be far harder to notice than a traceback.
 
 from __future__ import annotations
 
-from repowise.core.providers.llm.base import BaseProvider, GeneratedResponse
+from repowise.core.providers.llm.base import BaseProvider, GeneratedResponse, SamplingParameters
 from repowise.core.reasoning import ReasoningMode
 
 # Matches the ``provider_name`` the tier-2 file-page renderer has always
@@ -38,7 +38,7 @@ class TemplateProvider(BaseProvider):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int = 4096,
-        temperature: float = 0.3,
+        sampling: SamplingParameters = SamplingParameters(),  # noqa: B008
         request_id: str | None = None,
         reasoning: ReasoningMode = "auto",
         cache_hints: tuple = (),

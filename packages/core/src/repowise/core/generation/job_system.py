@@ -52,6 +52,8 @@ class Checkpoint:
     error_message: str | None
     provider_name: str
     model_name: str
+    outbound_sampling: dict[str, float | int] | None
+    effective_sampling: dict[str, float | int] | None
     current_level: int
 
     @classmethod
@@ -72,6 +74,8 @@ class Checkpoint:
             error_message=d.get("error_message"),
             provider_name=d.get("provider_name", ""),
             model_name=d.get("model_name", ""),
+            outbound_sampling=d.get("outbound_sampling"),
+            effective_sampling=d.get("effective_sampling"),
             current_level=d.get("current_level", 0),
         )
 
@@ -128,6 +132,8 @@ class JobSystem:
             error_message=None,
             provider_name=provider_name,
             model_name=model_name,
+            outbound_sampling=None,
+            effective_sampling=None,
             current_level=0,
         )
         self._save(checkpoint)
@@ -148,6 +154,35 @@ class JobSystem:
             cp.completed_pages = len(cp.completed_page_ids)
             cp.total_pages = max(cp.total_pages, cp.completed_pages)
         cp.updated_at = _now_iso()
+        self._save(cp)
+
+    def record_sampling(
+        self,
+        job_id: str,
+        *,
+        outbound_sampling: dict[str, float | int],
+        effective_sampling: dict[str, float | int],
+    ) -> None:
+        """Persist one run-wide sampling observation, rejecting disagreement.
+
+        Every model-written page in a run shares one generation configuration.
+        A provider adapter reporting a different outbound or effective mapping
+        on a later page therefore signals protocol drift; selecting either
+        value would make the checkpoint misleading.
+        """
+        cp = self._load(job_id)
+        outbound = dict(outbound_sampling)
+        effective = dict(effective_sampling)
+        if cp.outbound_sampling is None:
+            cp.outbound_sampling = outbound
+            cp.effective_sampling = effective
+        elif cp.outbound_sampling != outbound or cp.effective_sampling != effective:
+            raise ValueError(
+                "Sampling provenance changed within one generation job: "
+                f"expected outbound={cp.outbound_sampling!r}, "
+                f"effective={cp.effective_sampling!r}; "
+                f"received outbound={outbound!r}, effective={effective!r}"
+            )
         self._save(cp)
 
     def fail_page(self, job_id: str, page_id: str, error: str) -> None:

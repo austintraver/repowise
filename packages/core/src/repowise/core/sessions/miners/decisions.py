@@ -62,6 +62,7 @@ from repowise.core.analysis.decisions.provenance import (
 )
 from repowise.core.analysis.decisions.rationale_comments import CAUSAL_MARKERS
 from repowise.core.distill.corrections import command_anchor
+from repowise.core.providers.llm.base import SamplingParameters
 from repowise.core.sessions import ClaudeCodeAdapter, Event
 from repowise.core.sessions.cursor import iter_new_events
 from repowise.core.sessions.staging import SessionStagingStore
@@ -743,7 +744,10 @@ async def mine_session_decisions(
             prompt = SESSION_MINING_PROMPT.format(candidates_block=_candidates_block(chunk))
             try:
                 response = await provider.generate(
-                    _SYSTEM_PROMPT, prompt, max_tokens=2000, temperature=0.2
+                    _SYSTEM_PROMPT,
+                    prompt,
+                    max_tokens=2000,
+                    sampling=SamplingParameters(temperature=0.2),
                 )
             except Exception as exc:
                 logger.warning("session_mining.llm_failed", error=str(exc))

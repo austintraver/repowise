@@ -42,16 +42,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json as _json
 import logging
 import os
 import time
 from pathlib import Path
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from repowise.core.persistence.database import get_session
-from repowise.core.persistence.models import AnswerCache
+from repowise.core.persistence.models import AnswerCache, Page
+from repowise.core.providers.llm.base import SamplingParameters
 from repowise.core.registry import mcp_tool_registry as mcp
 from repowise.server.mcp_server._answer_context import (
     build_context_block as _build_context_block_v2,
@@ -117,6 +119,7 @@ from repowise.server.mcp_server.tool_answer.config import (
     _INLINE_BODY_MAX_LINES,
     _INLINE_BODY_MAX_SYMBOLS,
     _PAGE_EXCERPT_HITS,
+    _SYNTHESIS_PROMPT_VERSION,
 )
 from repowise.server.mcp_server.tool_answer.data_shape import (
     _is_data_shape_question,
@@ -125,6 +128,7 @@ from repowise.server.mcp_server.tool_answer.data_shape import (
 from repowise.server.mcp_server.tool_answer.dials import (
     answer_excerpt_chars,
     answer_max_tokens,
+    answer_sampling_parameters,
     synthesis_system_prompt,
     synthesis_user_prompt,
 )
@@ -173,6 +177,57 @@ _CLAIM_SUPPORT_GATE_ENV = "REPOWISE_ANSWER_CLAIM_SUPPORT_GATE"
 # Let strong answer-grounding earn "high" on a non-dominant retrieval (a rank-1
 # hit buried in a sibling cluster), not only a clear numeric dominance margin.
 _EARN_HIGH_GROUNDING_ENV = "REPOWISE_ANSWER_EARN_HIGH_GROUNDING"
+
+
+async def wiki_content_revision(session, repository_id: str) -> str:
+    """Return a compact revision that changes with production page writes.
+
+    Page upserts increment ``version`` and move ``updated_at`` when content
+    changes. Count catches insertions and deletions; the version total catches
+    rewrites; the latest timestamp distinguishes a delete-and-insert exchange
+    whose count and version total happen to balance.
+    """
+    result = await session.execute(
+        select(
+            func.count(Page.id),
+            func.coalesce(func.sum(Page.version), 0),
+            func.max(Page.updated_at),
+        ).where(Page.repository_id == repository_id)
+    )
+    page_count, version_total, latest_update = result.one()
+    serialized = _json.dumps(
+        {
+            "page_count": int(page_count or 0),
+            "version_total": int(version_total or 0),
+            "latest_update": latest_update.isoformat() if latest_update else None,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def answer_synthesis_identity(
+    *,
+    provider,
+    scope: str | None,
+    excerpt_chars: int,
+    max_tokens: int,
+    sampling: SamplingParameters,
+    wiki_revision: str,
+) -> dict[str, object]:
+    """Describe every pre-retrieval input that can change a cached answer."""
+    return {
+        "provider": getattr(provider, "provider_name", None),
+        "model": getattr(provider, "model_name", None),
+        "scope": (scope or "").strip(),
+        "excerpt_chars": excerpt_chars,
+        "max_tokens": max_tokens,
+        "sampling": sampling.configured(),
+        "prompt_version": _SYNTHESIS_PROMPT_VERSION,
+        "schema_version": _ANSWER_SCHEMA_VERSION,
+        "wiki_revision": wiki_revision,
+    }
 
 
 def _flag_on(env_name: str) -> bool:
@@ -650,6 +705,7 @@ async def get_answer(
     async with get_session(ctx.session_factory) as session:
         repository = await _get_repo(session)
         repo_id = repository.id
+        current_wiki_revision = await wiki_content_revision(session, repo_id)
 
     # --- Data-shape fast path ----------------------------------------------
     # "what fields does each entry in <blob> contain" is answered by mining the
@@ -667,14 +723,36 @@ async def get_answer(
         if grounded is not None:
             return _build_data_shape_payload(grounded, t0, repository)
 
+    # Resolve every synthesis input before cache lookup. Value questions can
+    # return a source-extracted answer, and the optional legacy ambiguity gate
+    # can return excerpts without synthesis; defer provider resolution for
+    # those two paths so a no-model answer never depends on provider setup.
+    # Their uncommon fall-through path skips the early cache read but still
+    # records the complete identity if synthesis runs.
+    repo_root_for_dials = getattr(ctx, "path", None)
+    excerpt_cap = answer_excerpt_chars(repo_root_for_dials)
+    synthesis_budget = answer_max_tokens(repo_root_for_dials)
+    answer_sampling = answer_sampling_parameters(repo_root_for_dials)
+    always_synthesize = _always_synthesize()
+    synthesis_setup_deferred = not always_synthesize or _is_value_question(question)
+    provider = None
+    synthesis_identity: dict[str, object] | None = None
+    if not synthesis_setup_deferred:
+        provider = _resolve_provider_for_answer(repo_root_for_dials)
+        synthesis_identity = answer_synthesis_identity(
+            provider=provider,
+            scope=scope,
+            excerpt_chars=excerpt_cap,
+            max_tokens=synthesis_budget,
+            sampling=answer_sampling,
+            wiki_revision=current_wiki_revision,
+        )
+
     # --- Cache lookup --------------------------------------------------------
-    # Scope: ignore the (rare) `scope` argument in the cache key for now;
-    # scoped queries are uncommon and including scope would balloon hit rate
-    # variance. We hash on (repo_id, normalized_question) only.
     qhash = _hash_question(question)
     cache_disabled = _cache_disabled()
     cached = None
-    if not cache_disabled:
+    if not cache_disabled and synthesis_identity is not None:
         async with get_session(ctx.session_factory) as session:
             res = await session.execute(
                 select(AnswerCache).where(
@@ -693,6 +771,7 @@ async def get_answer(
             # silently so the next write upgrades the row.
             cached_version = payload.get("_schema_version", 1)
             schema_stale = cached_version < _ANSWER_SCHEMA_VERSION
+            identity_stale = payload.get("_synthesis_identity") != synthesis_identity
             # Bypass-on-hedged: if the cached answer hedged, the retrieval +
             # symbol pipeline has since been upgraded (question-aware symbol
             # promotion, source-body excerpts). Give synthesis another shot
@@ -733,6 +812,8 @@ async def get_answer(
                     cached_version,
                     _ANSWER_SCHEMA_VERSION,
                 )
+            elif identity_stale:
+                _log.info("Bypassing cache entry with a different synthesis identity")
             elif hedged_cache:
                 _log.info("Bypassing hedged cache entry for re-synthesis")
             elif empty_cache:
@@ -752,6 +833,7 @@ async def get_answer(
                 # keys must not start with "_" except _meta).
                 payload.pop("_indexed_commit", None)
                 payload.pop("_schema_version", None)
+                payload.pop("_synthesis_identity", None)
                 payload["_meta"] = _build_meta(
                     timing_ms=(time.perf_counter() - t0) * 1000,
                     cached=True,
@@ -1045,7 +1127,6 @@ async def get_answer(
     # natural-language questions rarely have all content terms in one page
     # (typical 0.15-0.25), so a coverage threshold over-fires. Default dominant
     # for a lone hit (nothing to be ambiguous against).
-    always_synthesize = _always_synthesize()
     # Agreement dominance recovers the "both retrievers rank this #1" signal
     # that RRF fusion compresses out of the numeric score. Computed once and
     # OR'd into every place the ratio/gap gate decides dominance, so it can
@@ -1170,7 +1251,16 @@ async def get_answer(
             }
 
     # --- Synthesis (LLM) ---------------------------------------------------
-    provider = _resolve_provider_for_answer(getattr(ctx, "path", None))
+    if synthesis_identity is None:
+        provider = _resolve_provider_for_answer(repo_root_for_dials)
+        synthesis_identity = answer_synthesis_identity(
+            provider=provider,
+            scope=scope,
+            excerpt_chars=excerpt_cap,
+            max_tokens=synthesis_budget,
+            sampling=answer_sampling,
+            wiki_revision=current_wiki_revision,
+        )
     if provider is None:
         # Retrieval-only mode (no provider). Return the hits so the agent can
         # at least skip the search_codebase step — but mark the degradation
@@ -1206,11 +1296,6 @@ async def get_answer(
     with contextlib.suppress(Exception):
         prelude = await _build_structured_prelude(hits, decisions, ctx, repo_id)
 
-    # Both dials resolve against this repo's config so the prompt the model
-    # reads, the excerpt sizes inside it, and the output budget all agree.
-    repo_root_for_dials = getattr(ctx, "path", None)
-    excerpt_cap = answer_excerpt_chars(repo_root_for_dials)
-    synthesis_budget = answer_max_tokens(repo_root_for_dials)
     user_prompt = synthesis_user_prompt(
         question=question.strip(),
         n=len(hits),
@@ -1231,6 +1316,7 @@ async def get_answer(
         session_factory=getattr(ctx, "session_factory", None),
         repo_id=repo_id,
         max_tokens=synthesis_budget,
+        sampling=answer_sampling,
     )
     if failure_note is not None:
         return _degraded_payload(
@@ -1667,6 +1753,7 @@ async def get_answer(
     if answer_text and not cache_disabled:
         cache_payload = dict(payload)
         cache_payload["_schema_version"] = _ANSWER_SCHEMA_VERSION
+        cache_payload["_synthesis_identity"] = synthesis_identity
         commit_now = getattr(repository, "head_commit", None)
         if commit_now:
             cache_payload["_indexed_commit"] = commit_now

@@ -31,7 +31,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from repowise.core.providers.llm.base import BaseProvider, GeneratedResponse
+from repowise.core.providers.llm.base import (
+    BaseProvider,
+    GeneratedResponse,
+    SamplingParameters,
+    sampling_usage,
+)
 from repowise.core.reasoning import ReasoningMode
 
 # Resolve fixture directory relative to this file so tests work regardless
@@ -107,7 +112,7 @@ class MockProvider(BaseProvider):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int = 4096,
-        temperature: float = 0.3,
+        sampling: SamplingParameters = SamplingParameters(),  # noqa: B008
         request_id: str | None = None,
         reasoning: ReasoningMode = "auto",
         cache_hints: tuple = (),
@@ -118,7 +123,9 @@ class MockProvider(BaseProvider):
                 "system_prompt": system_prompt,
                 "user_prompt": user_prompt,
                 "max_tokens": max_tokens,
-                "temperature": temperature,
+                "temperature": sampling.temperature,
+                "top_p": sampling.top_p,
+                "top_k": sampling.top_k,
                 "request_id": request_id,
                 "reasoning": reasoning,
             }
@@ -143,7 +150,12 @@ class MockProvider(BaseProvider):
             input_tokens=150,
             output_tokens=75,
             cached_tokens=0,
-            usage={"mock": True, "fixture": self._fixture_name, "call": call_idx},
+            usage={
+                "mock": True,
+                "fixture": self._fixture_name,
+                "call": call_idx,
+                **sampling_usage(sampling.configured(), sampling.configured()),
+            },
         )
 
     @property

@@ -25,6 +25,9 @@ from repowise.core.providers.llm.base import (
     GeneratedResponse,
     ProviderError,
     ProviderModelOption,
+    SamplingParameters,
+    reject_sampling_parameters,
+    sampling_usage,
 )
 from repowise.core.rate_limiter import RateLimiter
 from repowise.core.reasoning import REASONING_MODES, ReasoningMode, normalize_reasoning
@@ -424,11 +427,14 @@ class CodexCliProvider(BaseProvider):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int = 4096,
-        temperature: float = 0.3,
+        sampling: SamplingParameters = SamplingParameters(),  # noqa: B008
         request_id: str | None = None,
         reasoning: ReasoningMode = "auto",
         cache_hints: tuple[CacheHint, ...] = (),
     ) -> GeneratedResponse:
+        reject_sampling_parameters(
+            "codex_cli", self.model_name, sampling, ("temperature", "top_p", "top_k")
+        )
         if self._rate_limiter:
             await self._rate_limiter.acquire(estimated_tokens=max_tokens)
 
@@ -508,6 +514,7 @@ class CodexCliProvider(BaseProvider):
             "source": "codex_exec",
             "model": self.model_name,
             "stderr": _tail(stderr, max_chars=1_000) if stderr.strip() else "",
+            **sampling_usage({}, {}),
         }
         if usage_missing:
             usage_payload["estimated"] = True

@@ -35,15 +35,15 @@ from repowise.core.providers.llm.base import (
     ProviderError,
     ProviderModelOption,
     RateLimitError,
+    SamplingParameters,
     ensure_reasoning_supported,
     fallback_model_option,
-    is_temperature_rejection,
     normalize_stop_reason,
     parse_retry_after,
     provider_retry_stop,
     provider_retry_wait,
     provider_should_retry,
-    remember_temperature_rejection,
+    sampling_usage,
     temperature_kwargs,
 )
 from repowise.core.rate_limiter import RateLimiter
@@ -186,7 +186,7 @@ class LiteLLMProvider(BaseProvider):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int = 4096,
-        temperature: float = 0.3,
+        sampling: SamplingParameters = SamplingParameters(),  # noqa: B008
         request_id: str | None = None,
         reasoning: ReasoningMode = "auto",
         cache_hints: tuple = (),
@@ -206,7 +206,7 @@ class LiteLLMProvider(BaseProvider):
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
-                temperature=temperature,
+                sampling=sampling,
                 request_id=request_id,
                 reasoning=reasoning_mode,
             )
@@ -227,7 +227,7 @@ class LiteLLMProvider(BaseProvider):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int,
-        temperature: float,
+        sampling: SamplingParameters,
         request_id: str | None,
         reasoning: ReasoningMode,
     ) -> GeneratedResponse:
@@ -245,7 +245,7 @@ class LiteLLMProvider(BaseProvider):
                 {"role": "user", "content": user_prompt},
             ],
             "max_tokens": max_tokens,
-            **temperature_kwargs(self._model, temperature),
+            **sampling.configured(),
         }
         if self._api_key:
             call_kwargs["api_key"] = self._api_key
@@ -254,18 +254,7 @@ class LiteLLMProvider(BaseProvider):
         call_kwargs.update(_litellm_reasoning_kwargs(reasoning))
 
         try:
-            try:
-                response = await litellm.acompletion(**call_kwargs)
-            except litellm.APIError as exc:
-                # LiteLLM proxies arbitrary vendors, same as OpenRouter: the
-                # models that reject `temperature` cannot be enumerated up
-                # front, so learn from the rejection and retry once without it.
-                if "temperature" not in call_kwargs or not is_temperature_rejection(exc):
-                    raise
-                remember_temperature_rejection(self._model)
-                log.debug("litellm.temperature.unsupported", model=self._model)
-                call_kwargs.pop("temperature")
-                response = await litellm.acompletion(**call_kwargs)
+            response = await litellm.acompletion(**call_kwargs)
         except litellm.RateLimitError as exc:
             raise RateLimitError(
                 "litellm",
@@ -291,7 +280,10 @@ class LiteLLMProvider(BaseProvider):
             cached_tokens=0,
             stop_reason=stop_reason,
             provider_stop_reason=provider_stop_reason,
-            usage=dict(usage) if usage else {},
+            usage={
+                **(dict(usage) if usage else {}),
+                **sampling_usage(sampling.configured(), {}),
+            },
         )
         log.debug(
             "litellm.generate.done",

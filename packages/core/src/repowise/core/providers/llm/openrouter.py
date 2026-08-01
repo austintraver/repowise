@@ -33,15 +33,15 @@ from repowise.core.providers.llm.base import (
     ProviderError,
     ProviderModelOption,
     RateLimitError,
+    SamplingParameters,
     ensure_reasoning_supported,
     fallback_model_option,
-    is_temperature_rejection,
     normalize_stop_reason,
     parse_retry_after,
     provider_retry_stop,
     provider_retry_wait,
     provider_should_retry,
-    remember_temperature_rejection,
+    sampling_usage,
     temperature_kwargs,
 )
 from repowise.core.rate_limiter import RateLimiter
@@ -260,7 +260,7 @@ class OpenRouterProvider(BaseProvider):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int = 4096,
-        temperature: float = 0.3,
+        sampling: SamplingParameters = SamplingParameters(),  # noqa: B008
         request_id: str | None = None,
         reasoning: ReasoningMode = "auto",
         cache_hints: tuple = (),
@@ -288,7 +288,7 @@ class OpenRouterProvider(BaseProvider):
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
-                temperature=temperature,
+                sampling=sampling,
                 request_id=request_id,
                 reasoning=reasoning_mode,
             )
@@ -326,7 +326,7 @@ class OpenRouterProvider(BaseProvider):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int,
-        temperature: float,
+        sampling: SamplingParameters,
         request_id: str | None,
         reasoning: ReasoningMode,
     ) -> GeneratedResponse:
@@ -337,23 +337,22 @@ class OpenRouterProvider(BaseProvider):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            **temperature_kwargs(self._model, temperature),
         }
-        kwargs.update(_openrouter_reasoning_kwargs(reasoning))
+        outbound = sampling.configured()
+        extra_body: dict[str, Any] = {}
+        if sampling.top_k is not None:
+            extra_body["top_k"] = sampling.top_k
+        for name in ("temperature", "top_p"):
+            value = outbound.get(name)
+            if value is not None:
+                kwargs[name] = value
+        reasoning_kwargs = _openrouter_reasoning_kwargs(reasoning)
+        extra_body.update(reasoning_kwargs.pop("extra_body", {}))
+        kwargs.update(reasoning_kwargs)
+        if extra_body:
+            kwargs["extra_body"] = extra_body
         try:
-            try:
-                response = await self._client.chat.completions.create(**kwargs)
-            except _OpenAIAPIStatusError as exc:
-                # OpenRouter fronts every vendor, so the set of models that
-                # reject `temperature` is not knowable ahead of time. Drop the
-                # parameter and retry once; the model is remembered so the rest
-                # of the run skips it.
-                if "temperature" not in kwargs or not is_temperature_rejection(exc):
-                    raise
-                remember_temperature_rejection(self._model)
-                log.debug("openrouter.temperature.unsupported", model=self._model)
-                kwargs.pop("temperature")
-                response = await self._client.chat.completions.create(**kwargs)
+            response = await self._client.chat.completions.create(**kwargs)
         except _OpenAIRateLimitError as exc:
             raise RateLimitError(
                 "openrouter",
@@ -384,6 +383,7 @@ class OpenRouterProvider(BaseProvider):
                 "prompt_tokens": usage.prompt_tokens if usage else 0,
                 "completion_tokens": usage.completion_tokens if usage else 0,
                 "total_tokens": usage.total_tokens if usage else 0,
+                **sampling_usage(outbound, {}),
             },
         )
         log.debug(

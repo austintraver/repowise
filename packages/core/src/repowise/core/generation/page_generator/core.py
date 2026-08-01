@@ -14,6 +14,7 @@ The level-by-level orchestration of ``generate_all`` lives in
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,14 +24,18 @@ import jinja2
 import structlog
 
 from repowise.core.ingestion.models import ParsedFile, RepoStructure
-from repowise.core.providers.llm.base import BaseProvider, CacheHint, GeneratedResponse
+from repowise.core.providers.llm.base import (
+    BaseProvider,
+    CacheHint,
+    GeneratedResponse,
+    SamplingParameters,
+)
 
 from ..context_assembler import ContextAssembler, FilePageContext
 from ..models import (
     GeneratedPage,
     GenerationConfig,
     compute_page_id,
-    compute_source_hash,
 )
 from ..styles import ONBOARDING_PAGE_TYPE, resolve_style
 from .helpers import _extract_summary, _now_iso, collapse_empty_duplicate_headings
@@ -48,6 +53,40 @@ if TYPE_CHECKING:
     from pathlib import Path as _Path  # noqa: F401
 
 log = structlog.get_logger(__name__)
+
+
+def generation_request_fingerprint(
+    *,
+    provider_name: str,
+    model_name: str,
+    page_type: str,
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int,
+    sampling: SamplingParameters,
+    reasoning: str,
+    source_salt: str = "",
+) -> str:
+    """Hash every request field that can change model-written page content.
+
+    Persistent reuse and the generator's in-memory cache both call this one
+    function. Keeping one serialization is the invariant: a value that changes
+    provider output cannot invalidate one cache while remaining invisible to
+    the other.
+    """
+    payload = {
+        "provider": provider_name,
+        "model": model_name,
+        "page_type": page_type,
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+        "max_tokens": max_tokens,
+        "sampling": sampling.configured(),
+        "reasoning": reasoning,
+        "source_salt": source_salt,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _attach_file_provenance(page: GeneratedPage, ctx: FilePageContext) -> None:
@@ -104,8 +143,8 @@ class PriorPage:
     """Snapshot of a previously-generated page used for cross-run reuse.
 
     Lives in :class:`PageGenerator` keyed by ``page_id``. When the freshly
-    rendered prompt produces a matching ``source_hash`` under the same
-    ``model_name``, the LLM call is skipped and ``content`` is reused.
+    complete generation request produces a matching ``source_hash``, the LLM
+    call is skipped and ``content`` is reused.
 
     ``content_hash`` is the preferred reuse key when both sides have one: it
     stays stable across runs even when the rendered prompt drifts (RAG context
@@ -157,10 +196,9 @@ class PageGenerator(PerTypeGenerationMixin, StructuralRenderMixin):
         self._style = resolve_style(getattr(config, "wiki_style", None), repo_path=repo_path)
         self._cache: dict[str, GeneratedResponse] = {}
         # Map of page_id → PriorPage from previous generation runs. When the
-        # rendered prompt's source_hash matches the prior page's hash AND the
-        # model is the same, the LLM call is skipped and the prior content is
-        # reused. Wired by the orchestrator from the persisted wiki_pages
-        # table.
+        # complete generation request fingerprint matches the prior page's
+        # source_hash, the LLM call is skipped and the prior content is reused.
+        # Wired by the orchestrator from the persisted wiki_pages table.
         self._prior_pages: dict[str, PriorPage] = prior_pages or {}
         self._reuse_count: int = 0
         # Per-template structural fingerprints, lazily computed; every input
@@ -323,17 +361,19 @@ class PageGenerator(PerTypeGenerationMixin, StructuralRenderMixin):
         regen even when the rendered prompt is byte-identical. Empty for every
         other page type, so their reuse hashes are unchanged.
         """
-        # Persistent cross-run cache: if the page exists from a prior run, was
-        # produced by the same model, and the prompt's source_hash matches,
-        # reuse the stored content without an LLM call.
+        request_fingerprint = self.generation_request_fingerprint(
+            page_type,
+            user_prompt,
+            source_salt=source_salt,
+        )
+
+        # Persistent cross-run cache: if the complete generation request
+        # matches the request that produced the prior page, reuse its content
+        # without an LLM call.
         if self._config.cache_enabled and target_path is not None:
             page_id = compute_page_id(page_type, target_path)
             prior = self._prior_pages.get(page_id)
-            if (
-                prior is not None
-                and prior.model_name == self._provider.model_name
-                and prior.source_hash == compute_source_hash(user_prompt + source_salt)
-            ):
+            if prior is not None and prior.source_hash == request_fingerprint:
                 self._reuse_count += 1
                 log.debug(
                     "page_cache.persistent_hit",
@@ -348,7 +388,7 @@ class PageGenerator(PerTypeGenerationMixin, StructuralRenderMixin):
                     usage={"reused_from_prior_run": True},
                 )
 
-        key = self._compute_cache_key(page_type, user_prompt)
+        key = request_fingerprint
         if self._config.cache_enabled and key in self._cache:
             log.debug("Cache hit", page_type=page_type, key=key[:8])
             return self._cache[key]
@@ -366,7 +406,7 @@ class PageGenerator(PerTypeGenerationMixin, StructuralRenderMixin):
             system_prompt,
             user_prompt,
             max_tokens=self._config.max_tokens,
-            temperature=self._config.temperature,
+            sampling=self._config.sampling_parameters,
             request_id=request_id,
             reasoning=self._config.reasoning,
             cache_hints=cache_hints,
@@ -404,19 +444,29 @@ class PageGenerator(PerTypeGenerationMixin, StructuralRenderMixin):
         )
         return instruction + base_system
 
-    def _compute_cache_key(self, page_type: str, user_prompt: str) -> str:
-        """Return SHA256(model + language + style + page_type + user_prompt) as cache key.
-
-        The style fingerprint is already embedded in ``user_prompt`` for active
-        styles, but include it explicitly so the in-memory cache never collides
-        across styles even if a future change moves the directive out of the prompt
-        body. Empty for the default style → key is unchanged from before.
-        """
-        raw = (
-            f"{self._provider.model_name}:{self._language}:"
-            f"{self._style.fingerprint}:{page_type}:{user_prompt}"
+    def generation_request_fingerprint(
+        self,
+        page_type: str,
+        user_prompt: str,
+        *,
+        source_salt: str = "",
+    ) -> str:
+        """Return the canonical identity shared by both page reuse paths."""
+        return generation_request_fingerprint(
+            provider_name=self._provider.provider_name,
+            model_name=self._provider.model_name,
+            page_type=page_type,
+            system_prompt=self._build_system_prompt(page_type),
+            user_prompt=user_prompt,
+            max_tokens=self._config.max_tokens,
+            sampling=self._config.sampling_parameters,
+            reasoning=self._config.reasoning,
+            source_salt=source_salt,
         )
-        return hashlib.sha256(raw.encode()).hexdigest()
+
+    def _compute_cache_key(self, page_type: str, user_prompt: str) -> str:
+        """Return the canonical generation request fingerprint."""
+        return self.generation_request_fingerprint(page_type, user_prompt)
 
     def _build_generated_page(
         self,
@@ -468,6 +518,10 @@ class PageGenerator(PerTypeGenerationMixin, StructuralRenderMixin):
         # exists byte-identically.
         if response.usage.get("reused_from_prior_run"):
             page.metadata["reused_from_prior_run"] = True
+        for field_name in ("outbound_sampling", "effective_sampling"):
+            sampling_values = response.usage.get(field_name)
+            if isinstance(sampling_values, dict):
+                page.metadata[field_name] = dict(sampling_values)
         return page
 
     def _render(self, template_name: str, *, style_prefix: bool = True, **kwargs: Any) -> str:

@@ -1577,6 +1577,7 @@ def run_update(
                     tech_stack=knowledge_graph_result.project.get("tech_stack", []),
                     generated_pages=generated_pages,
                     reasoning=config.reasoning,
+                    sampling=config.sampling_parameters,
                 )
             )
         except Exception as exc:

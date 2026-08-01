@@ -33,8 +33,10 @@ flags like `--commit-limit`, `--follow-renames`, or `--wiki-style`.
 
 > **Limited schema validation.** `config.yaml` is loaded as a plain YAML dict.
 > Unknown or misspelled keys are silently ignored, they won't error and won't
-> take effect. `max_tokens` must be a positive integer and `temperature` must
-> be a finite, non-negative number when documentation is generated. The
+> take effect. `max_tokens` must be a positive integer. Documentation
+> sampling values are validated when generation starts: `temperature` must be
+> finite and non-negative, `top_p` must be between 0 and 1, and `top_k` must
+> be a positive integer. The
 > `distill:` block is validated only when you run
 > `repowise doctor`. If a setting doesn't seem to be taking effect, check
 > spelling and indentation first.
@@ -48,9 +50,14 @@ embedder: mock                       # Embedding provider (mock if no key detect
 embedding_model: text-embedding-3-small  # Embedding model (provider default if omitted)
 answer_excerpt_chars: 1500            # Page chars per hit in get_answer prompts (200-20000)
 answer_max_tokens: 1024              # get_answer synthesis output budget (256-8192)
+answer_temperature: 0.2              # Sampling temperature for get_answer synthesis
+# answer_top_p: 0.95                 # Optional; enable only when the model accepts it
+# answer_top_k: 64                   # Optional; enable only when the model accepts it
 reasoning: auto                      # auto | off | none | minimal | low | medium | high | xhigh | max
 max_tokens: 16384                    # Max output tokens for each generated documentation page
 temperature: 0.3                     # Sampling temperature for generated documentation
+# top_p: 0.95                        # Optional; enable only when the model accepts it
+# top_k: 64                          # Optional; enable only when the model accepts it
 commit_limit: 500                    # Max commits per file for git analysis (clamped 1-10000)
 follow_renames: false                # Track file renames in git history
 wiki_style: comprehensive            # comprehensive | caveman | reference | tutorial | custom
@@ -83,10 +90,15 @@ You can edit this file directly. Changes take effect on the next `init`,
 | `embedding_model` | provider default | Embedding model the store was built with. Read wherever an embedder is constructed for this repo (init, update, reindex, search, doctor, and the MCP server's query embedding), so editing it takes effect; `OLLAMA_EMBEDDING_MODEL` / `REPOWISE_EMBEDDING_MODEL` env vars override it |
 | `answer_excerpt_chars` | `1500` | Chars of page content each top `get_answer` hit contributes, to the synthesis prompt and the low-confidence pointer payload alike. Clamped to 200-20000. Local deployments can afford more: the cost is prefill time, not billed tokens |
 | `answer_max_tokens` | `1024` | Output budget for one `get_answer` synthesis call, clamped to 256-8192. The answer's word target scales with it (150-400 words at the default, capped at 1200) |
+| `answer_temperature` | `0.2` | Sampling temperature requested only for `get_answer` synthesis |
+| `answer_top_p` | unset | Optional nucleus-sampling probability requested only for `get_answer` synthesis |
+| `answer_top_k` | unset | Optional top-k candidate count requested only for `get_answer` synthesis |
 | `context_token_budget` | `8000` | Token budget for one `get_context` response, clamped to 1000-25000 and always further clamped under the MCP host's output cap. Local agents with large context windows can afford more per call |
 | `reasoning` | `auto` | `auto`, `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `max_tokens` | `16384` | Maximum output tokens requested for each model-written documentation page |
 | `temperature` | `0.3` | Sampling temperature requested for each model-written documentation page |
+| `top_p` | unset | Optional nucleus-sampling probability requested for model-written documentation |
+| `top_k` | unset | Optional top-k candidate count requested for model-written documentation |
 | `token_budget` | `48000` | Context tokens assembled into each page-generation prompt (source, dependencies, graph signals). Oversized sources are trimmed to fit; models serving large context windows can afford more |
 | `dependency_summary_chars` | `200` | Chars of each key file's summary shown on its module page, so it sets how much the model reads about a module's parts while writing it. Ten key files per page, so the prompt grows by roughly ten times this. A store that keeps a fixed prefix per page (LanceDB keeps 2000 chars) serves a wider setting short and logs when it does |
 | `frozen_outline` | unset | Path (relative to the repo root) of a `concept-naming.json` a prior run wrote next to its wiki. When set, module-page titles, scopes, sections and reading order replay from that map instead of being named by the model, so every run writes its concept pages under identical instructions. Replay is strict: a concept group the map does not cover fails the run |
@@ -119,11 +131,19 @@ all use the same value. Providers may enforce a lower model limit. If
 generation reaches a token limit before the page is complete, repowise rejects
 the partial page instead of saving it.
 
-`temperature` controls sampling for the same model-written documentation
-calls. It is a persistent repository setting consumed by the same generation
-entry points as `max_tokens`. The value must be finite and non-negative.
-Providers may enforce a narrower range or normalize the requested value for
-particular model families.
+`temperature`, `top_p`, and `top_k` control sampling for model-written
+documentation. They apply to page prose, concept-outline naming and repair,
+and knowledge-graph prose. These persistent repository settings are consumed
+by the same generation entry points as `max_tokens`. `temperature` must be
+finite and non-negative, `top_p` must be between 0 and 1, and `top_k` must be
+a positive integer. A configured value is sent unchanged; if the selected
+provider or model cannot accept it, generation fails instead of dropping,
+clamping, or replacing it.
+
+`answer_temperature`, `answer_top_p`, and `answer_top_k` independently control
+sampling for `get_answer` synthesis. Their validation and exact-transmission
+rules match the documentation settings. Leaving an optional `top_p` or `top_k`
+unset lets the provider or model choose its default.
 
 `wiki_style` controls the voice and density of generated wiki pages. Set it with
 `init --wiki-style` or switch later with `repowise restyle <style>` (which also
@@ -521,6 +541,9 @@ The `.repowise/.env` file is gitignored automatically.
 | `REPOWISE_DOC_MODEL` | Older name for the `get_answer` model override; still honored, at lower precedence than `REPOWISE_ANSWER_MODEL` |
 | `REPOWISE_ANSWER_EXCERPT_CHARS` | Override `answer_excerpt_chars` for this process |
 | `REPOWISE_ANSWER_MAX_TOKENS` | Override `answer_max_tokens` for this process |
+| `REPOWISE_ANSWER_TEMPERATURE` | Override `answer_temperature` for this process |
+| `REPOWISE_ANSWER_TOP_P` | Override `answer_top_p` for this process |
+| `REPOWISE_ANSWER_TOP_K` | Override `answer_top_k` for this process |
 | `REPOWISE_CONTEXT_TOKEN_BUDGET` | Override `context_token_budget` for this process |
 | `REPOWISE_REASONING` | Override `reasoning` (see valid values above) |
 | `REPOWISE_ANSWER_TIMEOUT_S` | Seconds `get_answer` waits for synthesis before giving up. Defaults to a per-provider budget: 60s for the remote API providers, 120s for `ollama` and `litellm`, 180s for `codex_cli` and `opencode`. Raise it if your model is slower than its class suggests, lower it if you would rather an agent fail fast than block. Capped at 600s. Note your MCP client enforces its own tool timeout underneath this one, so setting a value above it produces a client-side error instead of repowise's diagnosable "synthesis exceeded its budget" response |

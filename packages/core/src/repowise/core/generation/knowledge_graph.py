@@ -15,6 +15,7 @@ from typing import Any
 import structlog
 
 from repowise.core.ids import file_path_of, kg_file_path_of
+from repowise.core.providers.llm.base import SamplingParameters
 
 logger = structlog.get_logger(__name__)
 
@@ -53,6 +54,7 @@ async def enrich_knowledge_graph(
     generated_pages: list[Any] | None = None,
     progress: Any | None = None,
     reasoning: str = "auto",
+    sampling: SamplingParameters | None = None,
 ) -> Any:
     """Enrich deterministic KG with LLM-generated layer names and tour.
 
@@ -69,6 +71,7 @@ async def enrich_knowledge_graph(
         repo_structure,
         tech_stack,
         reasoning=reasoning,
+        sampling=sampling,
     )
     return finalize_knowledge_graph(kg_skeleton, enriched_layers, tour, generated_pages)
 
@@ -80,6 +83,7 @@ async def enrich_knowledge_graph_structural(
     repo_structure: Any,
     tech_stack: list[dict],
     reasoning: str = "auto",
+    sampling: SamplingParameters | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Page-independent KG enrichment: LLM layer naming + guided tour.
 
@@ -88,9 +92,15 @@ async def enrich_knowledge_graph_structural(
     generation. Returns ``(enriched_layers, tour)``; the caller applies them to
     the skeleton via :func:`finalize_knowledge_graph` once pages are ready.
     """
+    resolved_sampling = sampling or SamplingParameters(temperature=0.3)
     enriched_layers = await _enrich_layers(
-        kg_skeleton.layers, llm_client, graph_builder, repo_structure, tech_stack,
+        kg_skeleton.layers,
+        llm_client,
+        graph_builder,
+        repo_structure,
+        tech_stack,
         reasoning=reasoning,
+        sampling=resolved_sampling,
     )
 
     # When curation is enabled it has already written the canonical,
@@ -103,8 +113,13 @@ async def enrich_knowledge_graph_structural(
         tour = kg_skeleton.tour
     else:
         tour = await _generate_tour(
-            enriched_layers, llm_client, graph_builder, repo_structure, kg_skeleton,
+            enriched_layers,
+            llm_client,
+            graph_builder,
+            repo_structure,
+            kg_skeleton,
             reasoning=reasoning,
+            sampling=resolved_sampling,
         )
 
     return enriched_layers, tour
@@ -170,6 +185,7 @@ async def _enrich_layers(
     repo_structure: Any,
     tech_stack: list[dict],
     reasoning: str = "auto",
+    sampling: SamplingParameters | None = None,
 ) -> list[dict]:
     """Batch-process layers through LLM for semantic naming."""
     if not layers:
@@ -205,7 +221,7 @@ async def _enrich_layers(
                 _LAYER_NAMING_SYSTEM,
                 user_prompt,
                 max_tokens=2048,
-                temperature=0.3,
+                sampling=sampling or SamplingParameters(temperature=0.3),
                 reasoning=reasoning,
             )
             parsed = _parse_json_response(response.content)
@@ -279,6 +295,7 @@ async def _generate_tour(
     repo_structure: Any,
     kg_skeleton: Any,
     reasoning: str = "auto",
+    sampling: SamplingParameters | None = None,
 ) -> list[dict]:
     """Generate guided tour from enriched layers + entry points."""
     pagerank = graph_builder.pagerank()
@@ -304,7 +321,7 @@ async def _generate_tour(
             _TOUR_GENERATION_SYSTEM,
             user_prompt,
             max_tokens=3000,
-            temperature=0.3,
+            sampling=sampling or SamplingParameters(temperature=0.3),
             reasoning=reasoning,
         )
         parsed = _parse_json_response(response.content)

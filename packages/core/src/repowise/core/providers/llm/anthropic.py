@@ -32,6 +32,8 @@ from repowise.core.providers.llm.base import (
     ProviderError,
     ProviderModelOption,
     RateLimitError,
+    SamplingParameters,
+    accepts_temperature,
     ensure_reasoning_supported,
     fallback_model_option,
     normalize_stop_reason,
@@ -39,6 +41,7 @@ from repowise.core.providers.llm.base import (
     provider_retry_stop,
     provider_retry_wait,
     provider_should_retry,
+    sampling_usage,
     temperature_kwargs,
 )
 from repowise.core.rate_limiter import RateLimiter
@@ -151,11 +154,17 @@ class AnthropicProvider(BaseProvider):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int = 4096,
-        temperature: float = 0.3,
+        sampling: SamplingParameters = SamplingParameters(),  # noqa: B008
         request_id: str | None = None,
         reasoning: ReasoningMode = "auto",
         cache_hints: tuple[CacheHint, ...] = (),
     ) -> GeneratedResponse:
+        if sampling.temperature is not None and not accepts_temperature(self._model):
+            raise ProviderError(
+                "anthropic",
+                f"Model {self._model!r} cannot accept configured sampling parameter: "
+                "temperature.",
+            )
         ensure_reasoning_supported("anthropic", self._model, reasoning)
         if self._rate_limiter:
             await self._rate_limiter.acquire(estimated_tokens=max_tokens)
@@ -172,7 +181,7 @@ class AnthropicProvider(BaseProvider):
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
-                temperature=temperature,
+                sampling=sampling,
                 request_id=request_id,
                 cache_hints=cache_hints,
             )
@@ -193,7 +202,7 @@ class AnthropicProvider(BaseProvider):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int,
-        temperature: float,
+        sampling: SamplingParameters,
         request_id: str | None,
         cache_hints: tuple[CacheHint, ...] = (),
     ) -> GeneratedResponse:
@@ -201,12 +210,13 @@ class AnthropicProvider(BaseProvider):
             system_prompt, user_prompt, cache_hints
         )
         try:
+            outbound = sampling.configured()
             response = await self._client.messages.create(
                 model=self._model,
                 max_tokens=max_tokens,
                 system=system_param,
                 messages=messages_param,
-                **temperature_kwargs(self._model, temperature),
+                **outbound,
             )
         except _AnthropicRateLimitError as exc:
             raise RateLimitError(
@@ -244,6 +254,7 @@ class AnthropicProvider(BaseProvider):
                 )
                 or 0,
                 "cache_read_input_tokens": cached,
+                **sampling_usage(outbound, {}),
             },
         )
         log.debug(

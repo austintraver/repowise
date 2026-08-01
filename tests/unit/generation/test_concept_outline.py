@@ -16,6 +16,7 @@ from repowise.core.generation.concept_tree.grouping import (
     group_files,
 )
 from repowise.core.generation.concept_tree.naming import (
+    NAMING_INSTRUCTIONS,
     build_payload,
     decode_response,
     deterministic_title,
@@ -309,6 +310,11 @@ class TestValidator:
 
 
 class TestPayload:
+    def test_prompt_says_merged_groups_may_span_multiple_areas(self):
+        assert "run of adjacent directory areas" in NAMING_INSTRUCTIONS
+        assert "`target` is only the page's storage identity" in NAMING_INSTRUCTIONS
+        assert "describe every directory area" in NAMING_INSTRUCTIONS
+
     def test_group_ids_carry_no_path_information(self):
         """A fabricated id must be recognisable as fabricated."""
         groups = group_files(FILES, params=TINY)
@@ -330,6 +336,23 @@ class TestPayload:
         assert any(n.startswith("a") for n in names)
         assert any(n.startswith("z") for n in names), names
 
+    def test_every_directory_gets_an_area_even_when_the_group_is_wide(self):
+        from repowise.core.generation.concept_tree.grouping import ConceptGroup
+
+        directories = [f"src/area{i:02d}" for i in range(12)]
+        group = ConceptGroup(
+            members=[f"{directory}/service.py" for directory in directories],
+            dirs=directories,
+            target_path="src",
+        )
+
+        payload, _ = build_payload([group])
+
+        areas = payload["groups"][0]["areas"]
+        assert [area["dir"] for area in areas] == directories
+        assert all(area["files"] == 1 for area in areas)
+        assert all(area["names"] == ["service.py"] for area in areas)
+
     def test_sibling_directories_are_shown_relative_to_what_they_share(self):
         from repowise.core.generation.concept_tree.grouping import ConceptGroup
 
@@ -340,6 +363,59 @@ class TestPayload:
         )
         payload, _ = build_payload([group])
         assert sorted(payload["groups"][0]["subdirs"]) == ["git_indexer", "graph"]
+
+    def test_merged_group_title_falls_back_when_area_receipt_is_missing(self):
+        from repowise.core.generation.concept_tree.grouping import ConceptGroup
+
+        group = ConceptGroup(
+            members=["apps/contour/runner.py", "apps/lifecycle/service.py"],
+            dirs=["apps/contour", "apps/lifecycle"],
+            target_path="apps/contour",
+        )
+        named, _ = decode_response(
+            {
+                "sections": [{"title": "Applications", "groups": ["g01"]}],
+                "names": {
+                    "g01": {
+                        "title": "Contour Mobile Runner",
+                        "scope": "Covers the Contour runner but excludes lifecycle services.",
+                    }
+                },
+            },
+            {"g01": group},
+        )
+
+        assert named[0].fallback
+        assert named[0].title != "Contour Mobile Runner"
+        assert "2 directories" in named[0].scope
+
+    def test_merged_group_title_is_accepted_only_with_every_area_receipt(self):
+        from repowise.core.generation.concept_tree.grouping import ConceptGroup
+
+        group = ConceptGroup(
+            members=["apps/contour/runner.py", "apps/lifecycle/service.py"],
+            dirs=["apps/contour", "apps/lifecycle"],
+            target_path="apps/contour",
+        )
+        named, _ = decode_response(
+            {
+                "sections": [{"title": "Applications", "groups": ["g01"]}],
+                "names": {
+                    "g01": {
+                        "title": "Application Runner and Lifecycle",
+                        "scope": "Covers runner and lifecycle services but excludes other apps.",
+                        "areas": {
+                            "a01": "Contour application runner",
+                            "a02": "Lifecycle service",
+                        },
+                    }
+                },
+            },
+            {"g01": group},
+        )
+
+        assert not named[0].fallback
+        assert named[0].title == "Application Runner and Lifecycle"
 
 
 def test_layer_prefixed_title_does_not_repeat_the_layer_word():

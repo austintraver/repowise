@@ -43,6 +43,7 @@ from repowise.core.analysis.decisions.semantic_match import (
     DEFAULT_DEDUP_TAU,
     find_related_decisions_many,
 )
+from repowise.core.providers.llm.base import SamplingParameters
 
 logger = structlog.get_logger(__name__)
 
@@ -440,7 +441,10 @@ async def _llm_contradiction_judge(provider: Any, *, text_a: str, text_b: str) -
     )
     try:
         response = await provider.generate(
-            _CONTRADICTION_SYSTEM, prompt, max_tokens=8, temperature=0.0
+            _CONTRADICTION_SYSTEM,
+            prompt,
+            max_tokens=8,
+            sampling=SamplingParameters(temperature=0.0),
         )
     except Exception:
         return False, ""
@@ -554,7 +558,10 @@ async def _judge_evolution(
     )
     try:
         response = await provider.generate(
-            _EVOLUTION_JUDGE_SYSTEM, prompt, max_tokens=400, temperature=0.1
+            _EVOLUTION_JUDGE_SYSTEM,
+            prompt,
+            max_tokens=400,
+            sampling=SamplingParameters(temperature=0.1),
         )
     except Exception:
         return None

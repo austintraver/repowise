@@ -33,6 +33,7 @@ from repowise.core.providers.llm.base import (
     ProviderError,
     ProviderModelOption,
     RateLimitError,
+    SamplingParameters,
     ensure_reasoning_supported,
     fallback_model_option,
     normalize_stop_reason,
@@ -40,6 +41,8 @@ from repowise.core.providers.llm.base import (
     provider_retry_stop,
     provider_retry_wait,
     provider_should_retry,
+    reject_sampling_parameters,
+    sampling_usage,
 )
 from repowise.core.rate_limiter import RateLimiter
 from repowise.core.reasoning import ReasoningMode, normalize_reasoning
@@ -209,7 +212,7 @@ class KimiProvider(BaseProvider):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int = 4096,
-        temperature: float = 0.3,
+        sampling: SamplingParameters = SamplingParameters(),  # noqa: B008
         request_id: str | None = None,
         reasoning: ReasoningMode = "auto",
         cache_hints: tuple = (),
@@ -230,7 +233,7 @@ class KimiProvider(BaseProvider):
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
-                temperature=temperature,
+                sampling=sampling,
                 request_id=request_id,
                 reasoning=reasoning_mode,
             )
@@ -251,21 +254,22 @@ class KimiProvider(BaseProvider):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int,
-        temperature: float,
+        sampling: SamplingParameters,
         request_id: str | None,
         reasoning: ReasoningMode,
     ) -> GeneratedResponse:
         try:
+            reject_sampling_parameters("kimi", self._model, sampling, ("top_k",))
+            outbound = sampling.configured()
             kwargs: dict[str, Any] = {
                 "model": self._model,
                 "max_tokens": max_tokens,
-                "temperature": _kimi_temperature(self._model, reasoning, temperature),
-                "top_p": 0.95,
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
             }
+            kwargs.update(outbound)
             kwargs.update(_kimi_reasoning_kwargs(reasoning))
             response = await self._client.chat.completions.create(**kwargs)
         except _OpenAIRateLimitError as exc:
@@ -294,6 +298,7 @@ class KimiProvider(BaseProvider):
                 "prompt_tokens": usage.prompt_tokens if usage else 0,
                 "completion_tokens": usage.completion_tokens if usage else 0,
                 "total_tokens": usage.total_tokens if usage else 0,
+                **sampling_usage(outbound, {}),
             },
         )
         log.debug(

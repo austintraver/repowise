@@ -329,7 +329,8 @@ _HIGH_CONFIDENCE_SCORE_FLOOR = 1.5
 # answer-grounding earns high on a non-dominant retrieval. Cached pre-v11 rows
 # carry the old body-dump / dominance-only grade and must bypass so the
 # recalibrated confidence reaches callers.
-_ANSWER_SCHEMA_VERSION = 11
+_ANSWER_SCHEMA_VERSION = 12
+_SYNTHESIS_PROMPT_VERSION = 1
 
 # Hard TTL on answer-cache rows. Commit-based invalidation (the payload's
 # stamped ``_indexed_commit`` vs the repo's current head) is the primary

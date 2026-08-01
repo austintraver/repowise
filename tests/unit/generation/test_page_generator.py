@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -11,7 +12,6 @@ from repowise.core.generation.models import (
     GeneratedPage,
     GenerationConfig,
     compute_page_id,
-    compute_source_hash,
 )
 from repowise.core.generation.page_generator import SYSTEM_PROMPTS, PageGenerator
 from repowise.core.generation.page_generator.core import PriorPage
@@ -202,11 +202,11 @@ async def test_repo_output_limit_reaches_provider_request(sample_config):
     assert provider.calls[0]["max_tokens"] == 2345
 
 
-async def test_repo_temperature_reaches_provider_request(sample_config):
+async def test_repo_sampling_reaches_provider_request(sample_config):
     """Exercise the public config-to-provider path without a network call."""
     provider = MockProvider()
     config = GenerationConfig.from_repo_config(
-        {"temperature": "0.15"},
+        {"temperature": "0.15", "top_p": "0.85", "top_k": "64"},
         token_budget=sample_config.token_budget,
         cache_enabled=False,
     )
@@ -215,6 +215,8 @@ async def test_repo_temperature_reaches_provider_request(sample_config):
     await generator._call_provider("module_page", "Document this module.", "request-id")
 
     assert provider.calls[0]["temperature"] == 0.15
+    assert provider.calls[0]["top_p"] == 0.85
+    assert provider.calls[0]["top_k"] == 64
 
 
 async def test_invalid_provider_output_raises_and_is_not_cached(sample_config):
@@ -262,13 +264,45 @@ def test_generated_page_retains_completion_stop_metadata(sample_config):
     assert page.metadata["provider_stop_reason"] == "stop"
 
 
+def test_generated_page_retains_sampling_provenance(sample_config):
+    generator = PageGenerator(MockProvider(), ContextAssembler(sample_config), sample_config)
+    page = generator._build_generated_page(
+        "module_page",
+        "pkg",
+        "Package",
+        GeneratedResponse(
+            content="## Overview\n\nA package.",
+            input_tokens=10,
+            output_tokens=20,
+            usage={
+                "outbound_sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 64},
+                "effective_sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 64},
+            },
+        ),
+        "source-hash",
+        4,
+    )
+
+    assert page.metadata["outbound_sampling"] == {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 64,
+    }
+    assert page.metadata["effective_sampling"] == page.metadata["outbound_sampling"]
+
+
 async def test_prior_page_reuse_bypasses_fresh_output_validation(sample_config):
     provider = MockProvider()
     prompt = "Document this module."
     target_path = "pkg"
+    seed_generator = PageGenerator(
+        provider,
+        ContextAssembler(sample_config),
+        sample_config,
+    )
     prior_pages = {
         compute_page_id("module_page", target_path): PriorPage(
-            source_hash=compute_source_hash(prompt),
+            source_hash=seed_generator.generation_request_fingerprint("module_page", prompt),
             model_name=provider.model_name,
             content=" \n ",
         )
@@ -289,6 +323,60 @@ async def test_prior_page_reuse_bypasses_fresh_output_validation(sample_config):
 
     assert response.content == " \n "
     assert provider.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("field_name", "changed_value"),
+    [
+        pytest.param("temperature", 0.8, id="temperature"),
+        pytest.param("top_p", 0.9, id="top-p"),
+        pytest.param("top_k", 64, id="top-k"),
+    ],
+)
+async def test_each_sampling_field_invalidates_persistent_page_reuse(
+    sample_graph,
+    field_name,
+    changed_value,
+):
+    base_config = GenerationConfig(temperature=0.2, top_p=0.7, top_k=32)
+    base_provider = MockProvider()
+    base_generator = PageGenerator(
+        base_provider,
+        ContextAssembler(base_config),
+        base_config,
+    )
+    original = await base_generator.generate_module_page(
+        "Core",
+        "python",
+        [],
+        sample_graph,
+        target_path="core",
+    )
+
+    changed_config = replace(base_config, **{field_name: changed_value})
+    changed_provider = MockProvider()
+    changed_generator = PageGenerator(
+        changed_provider,
+        ContextAssembler(changed_config),
+        changed_config,
+        prior_pages={
+            original.page_id: PriorPage(
+                source_hash=original.source_hash,
+                model_name=original.model_name,
+                content=original.content,
+            )
+        },
+    )
+    regenerated = await changed_generator.generate_module_page(
+        "Core",
+        "python",
+        [],
+        sample_graph,
+        target_path="core",
+    )
+
+    assert changed_provider.call_count == 1
+    assert regenerated.source_hash != original.source_hash
 
 
 # ---------------------------------------------------------------------------
@@ -588,8 +676,8 @@ def test_language_defaults_from_config_when_arg_omitted():
 def test_compute_cache_key_varies_by_language():
     gen_en = _gen("en")
     gen_ru = _gen("ru")
-    assert gen_en._compute_cache_key("file_page", "x") != gen_ru._compute_cache_key(
-        "file_page", "x"
+    assert gen_en._compute_cache_key("module_page", "x") != gen_ru._compute_cache_key(
+        "module_page", "x"
     )
 
 

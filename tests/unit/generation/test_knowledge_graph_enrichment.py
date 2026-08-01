@@ -17,6 +17,7 @@ from repowise.core.generation.knowledge_graph import (
     enrich_knowledge_graph_structural,
     finalize_knowledge_graph,
 )
+from repowise.core.providers.llm.base import SamplingParameters
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -379,6 +380,30 @@ class TestEnrichmentSplit:
         # …but the structural half has no pages, so no summary was backfilled
         # and it did not assign layers/tour onto the skeleton (finalize's job).
         assert all(n["summary"] == "" for n in skeleton.nodes)
+
+    @pytest.mark.asyncio
+    async def test_documentation_sampling_reaches_layer_and_tour_calls(self):
+        llm = _make_llm_client(
+            '{"layers": [{"id": "layer:core", "name": "Core", "description": "d"}], '
+            '"tour": [{"order": 1, "title": "Start", "description": "s", '
+            '"files": ["src/main.py"]}]}'
+        )
+        requested = SamplingParameters(temperature=1.0, top_p=0.95, top_k=64)
+
+        await enrich_knowledge_graph_structural(
+            _make_kg_skeleton(),
+            llm,
+            _make_graph_builder({"src/core.py": 0.5}),
+            _make_repo_structure(),
+            [],
+            sampling=requested,
+        )
+
+        assert llm.generate.await_count == 2
+        assert [call.kwargs["sampling"] for call in llm.generate.await_args_list] == [
+            requested,
+            requested,
+        ]
 
     def test_finalize_backfills_assigns_and_returns_skeleton(self):
         skeleton = _make_kg_skeleton()

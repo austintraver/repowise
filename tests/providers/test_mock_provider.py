@@ -7,7 +7,11 @@ access are required to run these tests.
 
 from __future__ import annotations
 
-from repowise.core.providers.llm.base import BaseProvider, GeneratedResponse
+from repowise.core.providers.llm.base import (
+    BaseProvider,
+    GeneratedResponse,
+    SamplingParameters,
+)
 from repowise.core.providers.llm.mock import MockProvider
 
 # ---------------------------------------------------------------------------
@@ -71,7 +75,7 @@ class TestBaseProviderInterface:
             system_prompt="system",
             user_prompt="user",
             max_tokens=2048,
-            temperature=0.0,
+            sampling=SamplingParameters(temperature=0.0, top_p=0.9, top_k=40),
             request_id="test-req-001",
         )
         assert isinstance(result, GeneratedResponse)
@@ -108,7 +112,7 @@ class TestCallTracking:
             system_prompt="my system",
             user_prompt="my user",
             max_tokens=2048,
-            temperature=0.5,
+            sampling=SamplingParameters(temperature=0.5, top_p=0.9, top_k=40),
             request_id="req-abc",
         )
         call = provider.calls[0]
@@ -116,6 +120,8 @@ class TestCallTracking:
         assert call["user_prompt"] == "my user"
         assert call["max_tokens"] == 2048
         assert call["temperature"] == 0.5
+        assert call["top_p"] == 0.9
+        assert call["top_k"] == 40
         assert call["request_id"] == "req-abc"
 
     async def test_calls_list_is_ordered(self) -> None:
