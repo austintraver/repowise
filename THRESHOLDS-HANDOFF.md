@@ -162,6 +162,9 @@ All **[V]** — each was reproduced before fixing and re-checked after.
    markdown boilerplate when read back from the store — reported different on
    400/400 real pages. A warm-store run and a cold-store run are therefore not
    the same experiment.
+5. Sampling configuration for documentation and answers is designed but not
+   implemented. The experiment policy is settled; the policy and defaults for
+   an eventual upstream pull request remain open. See section 7. **[V]**
 
 ---
 
@@ -200,3 +203,139 @@ Three practices that would have caught all of them:
 3. **Read whole files rather than grepping.** The worst bug (pgvector) is
    invisible to `grep max_chars`, which shows only the files that already have
    it. It is obvious reading the four backends side by side.
+
+---
+
+## 7. Sampling configuration design — not implemented
+
+This section records the design for adding configurable `temperature`,
+`top_p`, and `top_k`. No production code, branch reference, seal, or model run
+was changed while reaching it. **[V]**
+
+### Scope and settled experiment policy
+
+- Documentation generation and `get_answer` need independent settings. The
+  documentation settings govern page prose, concept outline naming and repair,
+  and knowledge graph layer and tour prose. The answer settings govern only
+  answer synthesis. Austin selected this scope over implementations limited to
+  documentation or to the bakeoff. **[V]**
+- The documentation names are `temperature`, `top_p`, and `top_k`. The answer
+  names are `answer_temperature`, `answer_top_p`, and `answer_top_k`. **[V]**
+- Generation 3 must explicitly pin `temperature: 1.0`, `top_p: 0.95`, and
+  `top_k: 64`. Ollama's official Gemma 4 listings call this the standardized
+  sampling configuration for best performance, and the same values are present
+  in the local artifacts. See the
+  [26b-mxfp8 listing](https://ollama.com/library/gemma4%3A26b-mxfp8). **[V]**
+- The bakeoff contract is exact or error: every configured sampling value must
+  reach the model unchanged or Repowise must reject the request before
+  generation. It must not clamp, omit, replace, or retry without a configured
+  value. **[V]**
+- The eventual upstream policy is deliberately unresolved. Austin expects that
+  best effort with a precise warning may make more sense when a provider will
+  alter or ignore an explicitly configured value, but asked that this remain a
+  pending decision until the feature is prepared for a Repowise pull request.
+  The upstream defaults are also unresolved: either all three values remain
+  unset unless configured, or the existing implicit documentation and answer
+  temperatures remain `0.3` and `0.2`. The bakeoff does not depend on that
+  choice because it pins all three documentation values. **[V]**
+
+### Why this is not three fields in one dataclass
+
+- `GenerationConfig` currently exposes only `temperature`, with a default of
+  `0.3`; `BaseProvider.generate` also accepts only `temperature`. **[V]**
+- Concept outline naming and repair bypass that configuration with
+  `temperature=0.2`. Knowledge graph layer naming and tour generation use
+  fixed `temperature=0.3`. Answer synthesis uses a separate fixed
+  `_SYNTHESIS_TEMPERATURE=0.2`. **[V]**
+- `OllamaProvider.generate` currently sends requests through Ollama's
+  OpenAI compatible chat completions endpoint. Ollama documents
+  `temperature` and `top_p` on that endpoint but not `top_k`; its native
+  `/api/chat` request accepts runtime generation options, and Ollama documents
+  `top_k` as one of those generation parameters. Real per-request `top_k`
+  control therefore requires moving generation that does not stream to the
+  native chat endpoint. See Ollama's
+  [compatibility fields](https://docs.ollama.com/api/openai-compatibility),
+  [native chat request](https://docs.ollama.com/api/chat), and
+  [generation parameters](https://docs.ollama.com/modelfile). **[V]**
+- Support varies by provider and model. For example, Gemini allows `top_k` only
+  on models whose metadata says it applies, while current Claude families can
+  reject all three sampling parameters. A common interface cannot honestly
+  promise universal support without checking the selected provider and model.
+  See the
+  [Gemini generation configuration](https://ai.google.dev/api/generate-content)
+  and
+  [Claude Messages restrictions](https://platform.claude.com/docs/en/build-with-claude/working-with-messages).
+  **[V]**
+
+The provider interface should carry one immutable `SamplingParameters` value
+with optional `temperature`, `top_p`, and `top_k` fields. `None` means that the
+field was not configured and should be omitted. Each provider must validate the
+configured values for its selected model and reasoning mode before sending the
+request. The experiment branch rejects an unsupported value;
+the pending upstream policy may later replace that rejection with an explicit
+warning. **[V]**
+
+### Required production changes
+
+1. Add the documentation fields to `GenerationConfig`, parse and validate
+   them, and include them in job snapshots. Add the three independent answer
+   settings to the answer dial resolver. **[V]**
+2. Extend `BaseProvider.generate` and every concrete provider. Providers that
+   can transmit a field must send it unchanged; providers that cannot must
+   report that fact rather than silently accepting it. `MockProvider` must
+   record all three so tests can observe forwarding. **[V]**
+3. Move `OllamaProvider.generate` to native `/api/chat`, mapping `max_tokens`
+   to `num_predict` and the three sampling values into `options`. Preserve the
+   existing retry, token accounting, reasoning, timeout, and cost recording
+   behavior. **[V]**
+4. Forward the documentation settings through page generation,
+   concept outline naming and repair, and knowledge graph enrichment. Forward
+   the independent answer settings into synthesis. **[V]**
+5. Replace page reuse's identity based only on the prompt with one canonical
+   generation request fingerprint shared by persistent reuse and the in-memory
+   cache. It must include provider, model, system and user prompts, maximum
+   output tokens, all three sampling values, reasoning, and the existing source
+   salt. The current persistent check compares only model plus a hash of the
+   user prompt and salt. **[V]**
+6. Resolve answer generation settings before the answer cache lookup. Its
+   identity must include provider, model, scope, excerpt width, maximum output
+   tokens, all three answer sampling values, prompt/schema version, and a wiki
+   content revision. The current table is uniquely keyed by repository and
+   normalized question hash, and the read path does not use its stored provider
+   or model to decide reuse. **[V]**
+7. Add the baseline configuration digest and candidate protocol digest to the
+   bakeoff seal. `doctor` must compare the seal with the harness, restored
+   configuration, model artifact, and frozen outline. Each run must record its
+   requested sampling values and the actual outbound fields. **[V]**
+
+The implementation belongs on a separate feature branch, proposed as
+`codex/configure-sampling`, based on `codex/scale-summary-read`. After it passes
+its mutation checks, merge it into `codex/runtime-bakeoff-3` and reseal there.
+There is no reason to create another runtime branch: generation 3 has no frozen
+outline and, as of this check, only the 26b run that creates the outline exists.
+`codex/runtime-bakeoff-2` remains untouched at `09d6de80`. **[V]**
+
+### Generation 3 consequence and proof requirements
+
+The existing generation 3 output from the 26b run cannot supply the frozen
+outline under the new seal because it did not run with the explicit
+`1.0 / 0.95 / 64` configuration. All six candidates must run again after
+resealing. No other generation 3 candidate has completed, so this is the least
+expensive point to make the correction. **[V]**
+
+Passing tests alone are not sufficient. Before the branch is accepted:
+
+1. Mutating each of the three documentation forwarding lines must turn a
+   focused test red.
+2. Mutating each sampling field in the page fingerprint must make a persistent
+   reuse test red.
+3. Mutating each native Ollama option must make a test that captures the request
+   turn red.
+4. Mutating each answer forwarding line and each answer cache identity field
+   must make its focused test red.
+5. Mutating the sealed sampling configuration or its digest must make the
+   bakeoff `doctor` test red.
+6. One short live request against the installed Ollama must capture
+   `temperature=1.0`, `top_p=0.95`, and `top_k=64` at the daemon boundary.
+   Comparing generated prose cannot prove that a sampling field was honored.
+   **[V]**
