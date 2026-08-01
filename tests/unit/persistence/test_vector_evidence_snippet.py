@@ -13,9 +13,9 @@ stored-prefix ceiling.
 from __future__ import annotations
 
 import pytest
-from structlog.testing import capture_logs
 
 from repowise.core.persistence.search import _SNIPPET_LEN
+from repowise.core.persistence.vector_store import lancedb_store
 from repowise.core.persistence.vector_store.lancedb_store import (
     STORED_SNIPPET_CHARS,
     LanceDBVectorStore,
@@ -117,7 +117,7 @@ class TestPromptSummaryWidths:
 
         assert len(found["src/walker.py"]["summary"]) <= _SNIPPET_LEN
 
-    async def test_a_read_above_the_stored_width_warns_once(self, store):
+    async def test_a_read_above_the_stored_width_warns_once(self, store, monkeypatch):
         content = "x" * (STORED_SNIPPET_CHARS + 100)
         await store.embed_batch(
             [
@@ -133,18 +133,26 @@ class TestPromptSummaryWidths:
             ]
         )
 
-        with capture_logs() as logs:
-            found = await store.get_page_summaries_by_paths(
-                ["src/walker.py", "src/other.py"],
-                max_chars=STORED_SNIPPET_CHARS + 500,
-            )
+        warnings = []
+        monkeypatch.setattr(
+            lancedb_store.log,
+            "warning",
+            lambda event, **fields: warnings.append({"event": event, **fields}),
+        )
+        found = await store.get_page_summaries_by_paths(
+            ["src/walker.py", "src/other.py"],
+            max_chars=STORED_SNIPPET_CHARS + 500,
+        )
 
         assert {len(payload["summary"]) for payload in found.values()} == {
             STORED_SNIPPET_CHARS
         }
-        warnings = [
-            event
-            for event in logs
-            if event.get("event") == "vector_store.summary_read_exceeds_stored_width"
-        ]
         assert len(warnings) == 1
+        assert warnings[0] == {
+            "event": "vector_store.summary_read_exceeds_stored_width",
+            "requested": STORED_SNIPPET_CHARS + 500,
+            "stored": STORED_SNIPPET_CHARS,
+            "hint": (
+                "LanceDB keeps a fixed prefix per page; the read is served at the stored width"
+            ),
+        }
