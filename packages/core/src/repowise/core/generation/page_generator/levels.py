@@ -122,13 +122,29 @@ async def _prefetch_dependency_summaries(run: _GenerationRun) -> None:
     if not needed_deps:
         return
     try:
-        batch = await run.vector_store.get_page_summaries_by_paths(list(needed_deps))
+        # These entries land in the shared reservoir, so read at its width.
+        batch = await run.vector_store.get_page_summaries_by_paths(
+            list(needed_deps), max_chars=run.config.summary_reservoir_chars
+        )
         for dep_path, payload in batch.items():
             summary = payload.get("summary") if payload else None
             if summary:
                 run.completed_page_summaries[dep_path] = summary
+    except TypeError:
+        # A store that cannot take the read width is a wiring error, not a
+        # transient failure. Swallowed, it costs every cross-run dependency
+        # summary and the guided tour's blurbs with nothing to see.
+        raise
     except Exception as exc:
-        log.debug("rag.batch_dep_prefetch_failed", error=str(exc))
+        # Everything else degrades rather than fails: this run's pages are
+        # written without their dependencies' summaries. Worth a warning —
+        # at debug it looks identical to a repo that simply has no edges.
+        log.warning(
+            "rag.batch_dep_prefetch_failed",
+            error=str(exc),
+            count=len(needed_deps),
+            hint="pages generate without cross-run dependency summaries",
+        )
 
 
 async def build_level2_coros(run: _GenerationRun) -> list[tuple[str, Any]]:

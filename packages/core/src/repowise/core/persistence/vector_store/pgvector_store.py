@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from repowise.core.providers.embedding.base import Embedder
 
 from ..search import SearchResult
-from ._base import VectorStore, iter_embed_chunks
+from ._base import FALLBACK_SUMMARY_CHARS, VectorStore, iter_embed_chunks
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -20,7 +20,7 @@ def _encode(vector: list[float]) -> str:
     return "[" + ",".join(str(v) for v in vector) + "]"
 
 
-def _summary_payload(content: object, metadata: object) -> dict:
+def _summary_payload(content: object, metadata: object, max_chars: int | None = None) -> dict:
     """Build the ``{'summary', 'key_exports'}`` payload from a wiki_pages row."""
     key_exports: list[str] = []
     if metadata and isinstance(metadata, dict):
@@ -34,7 +34,10 @@ def _summary_payload(content: object, metadata: object) -> dict:
         except (json.JSONDecodeError, AttributeError):
             pass
 
-    return {"summary": str(content or "")[:500], "key_exports": key_exports}
+    return {
+        "summary": str(content or "")[: max_chars or FALLBACK_SUMMARY_CHARS],
+        "key_exports": key_exports,
+    }
 
 
 class PgVectorStore(VectorStore):
@@ -227,11 +230,14 @@ class PgVectorStore(VectorStore):
             )
             return {r[0] for r in rows.fetchall()}
 
-    async def get_page_summary_by_path(self, path: str) -> dict | None:
+    async def get_page_summary_by_path(
+        self, path: str, max_chars: int | None = None
+    ) -> dict | None:
         """Return {'summary': str, 'key_exports': list[str]} for a previously-indexed page, or None.
 
-        Reads the 'content' column (first 500 chars) from the wiki_pages table
-        matched by target_path. 'key_exports' is derived from the page's
+        Reads the 'content' column from the wiki_pages table matched by
+        target_path, cut to *max_chars* (generation passes the width it will
+        inject into a prompt). 'key_exports' is derived from the page's
         ``exports`` if stored in a metadata JSON column; otherwise returns [].
         """
         from sqlalchemy.sql import text as sa_text
@@ -248,14 +254,16 @@ class PgVectorStore(VectorStore):
         if row is None:
             return None
 
-        return _summary_payload(row[0], row[1])
+        return _summary_payload(row[0], row[1], max_chars)
 
-    async def get_page_summaries_by_paths(self, paths: list[str]) -> dict[str, dict]:
+    async def get_page_summaries_by_paths(
+        self, paths: list[str], max_chars: int | None = None
+    ) -> dict[str, dict]:
         """One ``IN``-filtered SELECT instead of one query per path.
 
         Like the single-path variant (``LIMIT 1`` with no ``ORDER BY``), when
         several pages share a ``target_path`` an arbitrary one wins — here the
-        first row returned per path.
+        first row returned per path. Read width comes from *max_chars*.
         """
         if not paths:
             return {}
@@ -276,7 +284,7 @@ class PgVectorStore(VectorStore):
             tp = str(r[0])
             if tp in out:
                 continue
-            payload = _summary_payload(r[1], r[2])
+            payload = _summary_payload(r[1], r[2], max_chars)
             if payload.get("summary"):
                 out[tp] = payload
         return out

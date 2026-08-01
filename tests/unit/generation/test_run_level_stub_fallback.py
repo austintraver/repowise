@@ -13,7 +13,7 @@ import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from repowise.core.generation.models import STUB_FALLBACK_ERROR, GeneratedPage
+from repowise.core.generation.models import STUB_FALLBACK_ERROR, GeneratedPage, GenerationConfig
 from repowise.core.generation.page_generator.orchestrate import _GenerationRun
 
 
@@ -85,7 +85,7 @@ def _run_level() -> tuple[list[GeneratedPage], _RecordingJobSystem, _RecordingSt
             on_page_ready=None,
             vector_store=store,
             completed_page_summaries={},
-        config=SimpleNamespace(dependency_summary_chars=200),
+            config=GenerationConfig(),
         )
         return await _GenerationRun.run_level(
             run,

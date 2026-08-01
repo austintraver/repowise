@@ -654,6 +654,27 @@ def test_guided_tour_builds_with_stops_and_summaries() -> None:
     assert ctx.stops[0].summary == "Entry orchestrator."
 
 
+def test_guided_tour_cuts_a_long_summary_to_its_own_width() -> None:
+    """A stop blurb is cut to GUIDED_TOUR_SUMMARY_CHARS, not to whatever it got.
+
+    The reservoir is filled wider than this on purpose, so a fixture whose
+    summary is shorter than the cut never exercises it.
+    """
+    from repowise.core.generation.models import GUIDED_TOUR_SUMMARY_CHARS
+
+    spec = onboarding.get_spec("guided_tour")
+    assert spec is not None
+    sig = _signals(
+        files=[_file("src/main.py", is_entry_point=True)],
+        tour_stops=_tour_stops(3),
+        layer_order=("API", "Service", "Data"),
+        completed_page_summaries={"src/file_0.py": "z" * 3000},
+    )
+    ctx = spec.build_context(sig)
+    assert ctx is not None
+    assert len(ctx.stops[0].summary) == GUIDED_TOUR_SUMMARY_CHARS
+
+
 # ---------------------------------------------------------------------------
 # Templates render
 # ---------------------------------------------------------------------------

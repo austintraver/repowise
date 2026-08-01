@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import structlog
+
 from repowise.core.providers.embedding.base import Embedder
 
 from ..search import _SNIPPET_LEN, SearchResult, snippet_around
@@ -9,20 +11,32 @@ from ._base import VectorStore, iter_embed_chunks
 
 __all__ = ["STORED_SNIPPET_CHARS", "LanceDBVectorStore"]
 
-# How much of a page's content each row keeps.
-#
-# A hit's evidence snippet should show the region the query matched, not the
-# page's opening line — on a generated page that opener is the same
-# ``## Overview`` paragraph every time. The full-text arm holds the whole page
-# at search time and can cut a window from it; this arm cannot, because what a
-# search sees was fixed when the row was written. So the row keeps enough
-# content for a window to exist inside it.
-#
-# It is a prefix, not the whole page: this column is read on the hot path and
-# duplicated per row, and a match beyond the first few thousand characters is
-# rare enough not to be worth the store. A row written before this widening
-# holds 200 characters and simply windows to its opener.
+log = structlog.get_logger(__name__)
+
+# How much page content a LanceDB row keeps. Search needs enough text to cut an
+# evidence window around a match, while dependency-summary reads take a prefix
+# at their configured width. LanceDB duplicates this column on its hot path, so
+# it stores a bounded prefix. Pgvector and the in-memory backend hold the full
+# page and do not share this ceiling.
 STORED_SNIPPET_CHARS = 2_000
+
+
+def served_width(max_chars: int | None) -> int:
+    """The width a read can actually be served, warning when it is short.
+
+    This backend keeps a fixed prefix of each page, so a caller asking for more
+    gets what was stored. Unlike the other two backends that is a real ceiling,
+    and a silent one is how a configured width stops reaching the prompt.
+    """
+    requested = max_chars or _SNIPPET_LEN
+    if requested > STORED_SNIPPET_CHARS:
+        log.warning(
+            "vector_store.summary_read_exceeds_stored_width",
+            requested=requested,
+            stored=STORED_SNIPPET_CHARS,
+            hint="LanceDB keeps a fixed prefix per page; the read is served at the stored width",
+        )
+    return min(requested, STORED_SNIPPET_CHARS)
 
 
 def _evidence(stored: str, query: str | None) -> str:
@@ -359,14 +373,16 @@ class LanceDBVectorStore(VectorStore):
         rows = await self._table.query().select(["page_id"]).to_list()  # type: ignore[union-attr]
         return {r["page_id"] for r in rows}
 
-    async def get_page_summary_by_path(self, path: str) -> dict | None:
+    async def get_page_summary_by_path(
+        self, path: str, max_chars: int | None = None
+    ) -> dict | None:
         """Return {'summary': str, 'key_exports': list[str]} for a previously-indexed page, or None.
 
-        The summary is the opening of 'content_snippet'. That column holds more
-        than this now, because a search cuts an evidence window out of it, but
-        this text goes into a prompt — so it keeps the width it always had
-        rather than growing with the store behind it. 'key_exports' is not in
-        the schema, so it comes back empty; the caller only uses the summary.
+        The summary is the opening of 'content_snippet', cut to *max_chars*.
+        That column holds STORED_SNIPPET_CHARS of the page, which is this
+        backend's ceiling: a wider read is served short and says so. Omit
+        *max_chars* for the search-snippet width. 'key_exports' is not in the
+        schema, so it comes back empty; the caller only uses the summary.
         """
         await self._ensure_connected()
         if self._table is None:
@@ -387,14 +403,18 @@ class LanceDBVectorStore(VectorStore):
         if not rows:
             return None
 
-        summary = str(rows[0].get("content_snippet") or "")[:_SNIPPET_LEN]
+        width = served_width(max_chars)
+        summary = str(rows[0].get("content_snippet") or "")[:width]
         return {"summary": summary, "key_exports": []}
 
-    async def get_page_summaries_by_paths(self, paths: list[str]) -> dict[str, dict]:
+    async def get_page_summaries_by_paths(
+        self, paths: list[str], max_chars: int | None = None
+    ) -> dict[str, dict]:
         """One ``IN``-filtered scan instead of one filtered query per path.
 
         Mirrors the single-path semantics (first row per path wins, empty
-        summaries dropped, ``key_exports`` not stored in this schema).
+        summaries dropped, ``key_exports`` not stored in this schema, read width
+        from *max_chars*).
         """
         if not paths:
             return {}
@@ -412,12 +432,13 @@ class LanceDBVectorStore(VectorStore):
         except Exception:
             return {}
 
+        width = served_width(max_chars)
         out: dict[str, dict] = {}
         for r in rows:
             tp = str(r.get("target_path") or "")
             if not tp or tp in out:
                 continue
-            summary = str(r.get("content_snippet") or "")[:_SNIPPET_LEN]
+            summary = str(r.get("content_snippet") or "")[:width]
             if summary:
                 out[tp] = {"summary": summary, "key_exports": []}
         return out

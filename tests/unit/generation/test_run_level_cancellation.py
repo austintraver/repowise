@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from repowise.core.generation.models import GeneratedPage
+from repowise.core.generation.models import GeneratedPage, GenerationConfig
 from repowise.core.generation.page_generator.orchestrate import _GenerationRun
 
 
@@ -53,7 +53,7 @@ def _fake_run(max_concurrency: int = 1) -> SimpleNamespace:
         on_page_ready=None,
         vector_store=None,
         completed_page_summaries={},
-        config=SimpleNamespace(dependency_summary_chars=200),
+        config=GenerationConfig(),
     )
 
 

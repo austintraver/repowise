@@ -56,6 +56,11 @@ FreshnessStatus = Literal["fresh", "stale", "expired", "unknown"]
 DEFAULT_MAX_TOKENS = 16384
 DEFAULT_TEMPERATURE = 0.3
 
+# Chars of a page summary shown per stop on the guided tour. The in-run summary
+# reservoir is filled to max(dependency_summary_chars, this) by every writer, so
+# the tour gets its full width regardless of how the dial is set.
+GUIDED_TOUR_SUMMARY_CHARS = 240
+
 
 def normalize_temperature(value: object) -> float:
     """Return a finite, non-negative sampling temperature."""
@@ -84,10 +89,11 @@ class GenerationConfig:
         max_tokens:               Max tokens in LLM completion.
         temperature:              Sampling temperature (0.3 for consistent docs).
         token_budget:             Context tokens fed to LLM (not output).
-        dependency_summary_chars: Chars of a dependency page's summary injected
-                                  into pages that depend on it. The stored
-                                  ``content_snippet`` and the in-run summary
-                                  reservoirs derive from it at fixed ratios.
+        dependency_summary_chars: Chars of each key file's summary shown on its
+                                  module page — how much the model reads about
+                                  a module's parts while writing it. See
+                                  ``summary_reservoir_chars`` for the width the
+                                  shared reservoir is filled to.
         max_concurrency:          asyncio.Semaphore size for parallel calls.
         embed_concurrency:        asyncio.Semaphore size for vector-store writes.
                                   Defaults to max_concurrency.
@@ -301,10 +307,36 @@ class GenerationConfig:
             or self.max_tokens <= 0
         ):
             raise ValueError("max_tokens must be a positive integer")
+        # Checked here rather than in from_repo_config so the CLI and every
+        # direct construction get it too. Every bad value reaches a consumer as
+        # a slice bound: a negative one trims the end of each summary instead of
+        # capping it, and ``True`` silently means one character. How much a
+        # given store can actually serve is that backend's business — LanceDB
+        # keeps a fixed prefix and says so when a read outruns it, while
+        # pgvector and the in-memory store hold whole pages.
+        if (
+            isinstance(self.dependency_summary_chars, bool)
+            or not isinstance(self.dependency_summary_chars, int)
+            or self.dependency_summary_chars <= 0
+        ):
+            raise ValueError("dependency_summary_chars must be a positive integer")
         object.__setattr__(self, "temperature", normalize_temperature(self.temperature))
         if self.embed_concurrency is None:
             object.__setattr__(self, "embed_concurrency", self.max_concurrency)
         object.__setattr__(self, "reasoning", normalize_reasoning(self.reasoning))
+
+    @property
+    def summary_reservoir_chars(self) -> int:
+        """Width the in-run page-summary reservoir is filled to.
+
+        The reservoir is written once per finished page and read by consumers
+        that each cut their own width from it: module pages take
+        ``dependency_summary_chars``, the guided tour takes
+        ``GUIDED_TOUR_SUMMARY_CHARS``. It therefore holds the widest of them, so
+        no setting can starve a reader. Adding a consumer means widening this,
+        not editing the writers.
+        """
+        return max(self.dependency_summary_chars, GUIDED_TOUR_SUMMARY_CHARS)
 
 
 # ---------------------------------------------------------------------------

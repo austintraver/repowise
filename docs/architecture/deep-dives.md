@@ -640,7 +640,7 @@ vector:          list<float32>[dim]
 title:           string
 page_type:       string
 target_path:     string
-content_snippet: string (first 200 chars)
+content_snippet: string (first 2000 chars)
 ```
 
 **Upsert strategy:**
