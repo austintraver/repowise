@@ -5,9 +5,24 @@ from __future__ import annotations
 from repowise.core.providers.embedding.base import Embedder
 
 from ..search import SearchResult
-from ._base import VectorStore, cosine_similarity, iter_embed_chunks
+from ._base import (
+    FALLBACK_SUMMARY_CHARS,
+    VectorStore,
+    cosine_similarity,
+    iter_embed_chunks,
+)
 
 __all__ = ["InMemoryVectorStore"]
+
+
+def summary_text(meta: dict, max_chars: int | None) -> str:
+    """The summary a lookup returns, cut once to the caller's width.
+
+    Cutting the fallback to a fixed width first and the caller's width second
+    would cap any request wider than the fixed one.
+    """
+    text = meta.get("summary") or str(meta.get("content", ""))
+    return text[: max_chars or FALLBACK_SUMMARY_CHARS]
 
 
 class InMemoryVectorStore(VectorStore):
@@ -111,21 +126,26 @@ class InMemoryVectorStore(VectorStore):
     async def list_page_ids(self) -> set[str]:
         return set(self._store.keys())
 
-    async def get_page_summary_by_path(self, path: str) -> dict | None:
+    async def get_page_summary_by_path(
+        self, path: str, max_chars: int | None = None
+    ) -> dict | None:
         """Return {'summary': str, 'key_exports': list[str]} for a previously-indexed page, or None.
 
         Reads 'summary' from metadata if present (set by the generation
-        pipeline), else falls back to the first 500 chars of 'content'.
+        pipeline), else 'content'. Either is cut to *max_chars*, or to
+        :data:`FALLBACK_SUMMARY_CHARS` when the caller states no width.
         'key_exports' reads the 'exports' metadata field if present, else [].
         """
         for _pid, (_, meta) in self._store.items():
             if meta.get("target_path") == path:
-                summary = meta.get("summary") or str(meta.get("content", ""))[:500]
+                summary = summary_text(meta, max_chars)
                 key_exports = meta.get("exports") or []
                 return {"summary": summary, "key_exports": list(key_exports)}
         return None
 
-    async def get_page_summaries_by_paths(self, paths: list[str]) -> dict[str, dict]:
+    async def get_page_summaries_by_paths(
+        self, paths: list[str], max_chars: int | None = None
+    ) -> dict[str, dict]:
         """Single-pass scan over the store — avoids N full scans when
         many paths are queried at once.
         """
@@ -136,7 +156,7 @@ class InMemoryVectorStore(VectorStore):
         for _pid, (_, meta) in self._store.items():
             tp = meta.get("target_path")
             if tp in wanted and tp not in out:
-                summary = meta.get("summary") or str(meta.get("content", ""))[:500]
+                summary = summary_text(meta, max_chars)
                 out[str(tp)] = {
                     "summary": summary,
                     "key_exports": list(meta.get("exports") or []),

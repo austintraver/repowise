@@ -17,10 +17,17 @@ from ..search import SearchResult
 __all__ = [
     "EMBED_BATCH_MAX_ITEMS",
     "EMBED_TEXT_MAX_CHARS",
+    "FALLBACK_SUMMARY_CHARS",
     "VectorStore",
     "cosine_similarity",
     "iter_embed_chunks",
 ]
+
+# Read width for a summary lookup whose caller states none. Backends that hold
+# whole pages rather than a stored prefix need some bound so an unbounded page
+# cannot reach a prompt; generation always passes the width it will inject, so
+# this serves callers wanting an excerpt.
+FALLBACK_SUMMARY_CHARS = 500
 
 # One embedder call per chunk of this many items. OpenAI rejects embedding
 # requests past 300k total tokens — a generation level of 275 full wiki
@@ -197,15 +204,25 @@ class VectorStore(ABC):
         """
         return set()  # default: empty (subclasses should override)
 
-    async def get_page_summary_by_path(self, path: str) -> dict | None:
+    async def get_page_summary_by_path(
+        self, path: str, max_chars: int | None = None
+    ) -> dict | None:
         """Return {'summary': str, 'key_exports': list[str]} for a previously-indexed page, or None.
 
         Used for RAG context injection during doc generation: when generating page B
         that imports A, we fetch A's previously-generated summary and feed it to the LLM.
+
+        *max_chars* is the width the caller will inject, and generation passes
+        ``summary_reservoir_chars``. Serve it in full where the backend can:
+        one that keeps whole pages always can, one that keeps a fixed prefix
+        cannot exceed it and should say so rather than quietly returning less.
+        Each backend chooses what an omitted width means.
         """
         return None  # default: no-op (subclasses should override)
 
-    async def get_page_summaries_by_paths(self, paths: list[str]) -> dict[str, dict]:
+    async def get_page_summaries_by_paths(
+        self, paths: list[str], max_chars: int | None = None
+    ) -> dict[str, dict]:
         """Batch variant of :meth:`get_page_summary_by_path`.
 
         Returns a mapping of resolved paths → summary dict for every
@@ -214,12 +231,15 @@ class VectorStore(ABC):
         ``asyncio.gather`` so callers don't have to await each one
         sequentially — backends that can do a single SQL/index scan
         should override this for the obvious efficiency gain.
+
+        *max_chars* is forwarded to each per-path read so batch and single-path
+        callers resolve the same width.
         """
         import asyncio as _asyncio
 
         if not paths:
             return {}
-        coros = [self.get_page_summary_by_path(p) for p in paths]
+        coros = [self.get_page_summary_by_path(p, max_chars) for p in paths]
         results = await _asyncio.gather(*coros, return_exceptions=True)
         out: dict[str, dict] = {}
         for path, result in zip(paths, results, strict=False):

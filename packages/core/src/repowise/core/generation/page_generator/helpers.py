@@ -78,14 +78,14 @@ def _extract_summary(content: str, max_chars: int = 320, skip_metadata: bool = F
     return cut.rstrip() + "…"
 
 
-def overview_summary(content: str, max_chars: int = 400) -> str:
+def overview_summary(content: str, max_chars: int) -> str:
     """Return a dependency-context blurb favouring the ## Overview section.
 
     Distinct from :func:`_extract_summary`: this is the summary fed into
     downstream pages' dependency context and into the vector-store embed
     payload, where the ## Overview lead sentence is the most useful anchor.
-    ``max_chars`` scales with ``GenerationConfig.dependency_summary_chars``;
-    the section scan window stays 4x the cap so the blurb can always fill it.
+    ``max_chars`` is the reservoir width the caller is filling; the section
+    scan window stays 4x it so the blurb can always fill it.
     """
     if "## Overview" in content:
         start = content.index("## Overview") + len("## Overview")

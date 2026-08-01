@@ -11,10 +11,14 @@ from __future__ import annotations
 
 import pytest
 
-from repowise.core.generation.models import GeneratedPage
+from repowise.core.generation.models import GeneratedPage, GenerationConfig
 from repowise.core.generation.page_generator.orchestrate import _embed_item
 from repowise.core.persistence.vector_store.in_memory import InMemoryVectorStore
 from repowise.core.providers.embedding.base import MockEmbedder
+
+# These tests are about the embed metadata's title, not its widths;
+# the width is stated explicitly rather than inherited.
+_RESERVOIR = GenerationConfig().summary_reservoir_chars
 
 
 def _page(**overrides) -> GeneratedPage:
@@ -39,13 +43,13 @@ def _page(**overrides) -> GeneratedPage:
 
 
 def test_embed_metadata_carries_the_page_title():
-    _pid, _text, meta = _embed_item(_page())
+    _pid, _text, meta = _embed_item(_page(), _RESERVOIR)
     assert meta["title"] == "mod.py (ingestion)"
 
 
 def test_embed_metadata_title_is_never_silently_blank():
     """A page always has a title; the metadata must not drop it."""
-    _pid, _text, meta = _embed_item(_page(title="Retrieval Pipeline"))
+    _pid, _text, meta = _embed_item(_page(title="Retrieval Pipeline"), _RESERVOIR)
     assert meta.get("title"), "blank title in embed metadata is the 2026-07 bug"
 
 
@@ -53,7 +57,7 @@ def test_embed_metadata_title_is_never_silently_blank():
 async def test_title_survives_into_the_vector_store():
     """End-to-end through the store the generation path actually writes to."""
     store = InMemoryVectorStore(MockEmbedder())
-    await store.embed_batch([_embed_item(_page())])
+    await store.embed_batch([_embed_item(_page(), _RESERVOIR)])
 
     results = await store.search("parses a module", limit=1)
     assert results

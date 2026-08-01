@@ -91,10 +91,12 @@ class _SlowVectorStore:
     async def list_page_ids(self) -> set[str]:
         return set()
 
-    async def get_page_summary_by_path(self, path: str) -> None:
+    async def get_page_summary_by_path(self, path: str, max_chars: int | None = None) -> None:
         return None
 
-    async def get_page_summaries_by_paths(self, paths: list[str]) -> dict[str, dict]:
+    async def get_page_summaries_by_paths(
+        self, paths: list[str], max_chars: int | None = None
+    ) -> dict[str, dict]:
         return {}
 
     async def search(self, query: str, limit: int = 3) -> list[Any]:

@@ -5,13 +5,15 @@ vector arm cannot: LanceDB stores a fixed prefix of the content at index time
 and that is all a search has to work with. So the stored prefix has to be wide
 enough for a window to be cut out of it.
 
-Two other readers of the same column use it as a short prompt summary and must
-keep the size they had — widening the store must not widen a prompt.
+Summary readers use the same column. An omitted width keeps the historical
+200-character excerpt, while an explicit width is served up to LanceDB's
+stored-prefix ceiling.
 """
 
 from __future__ import annotations
 
 import pytest
+from structlog.testing import capture_logs
 
 from repowise.core.persistence.search import _SNIPPET_LEN
 from repowise.core.persistence.vector_store.lancedb_store import (
@@ -96,8 +98,8 @@ class TestSearchSnippet:
         assert results[0].snippet.startswith("## Overview")
 
 
-class TestPromptSummariesKeepTheirSize:
-    """The prompt-injection readers of this column must not grow with it."""
+class TestPromptSummaryWidths:
+    """Summary reads distinguish the fallback width from an explicit request."""
 
     async def test_summary_by_path_stays_at_the_old_width(self, store):
         content = _OPENER + _MATCH
@@ -114,3 +116,35 @@ class TestPromptSummariesKeepTheirSize:
         found = await store.get_page_summaries_by_paths(["src/walker.py"])
 
         assert len(found["src/walker.py"]["summary"]) <= _SNIPPET_LEN
+
+    async def test_a_read_above_the_stored_width_warns_once(self, store):
+        content = "x" * (STORED_SNIPPET_CHARS + 100)
+        await store.embed_batch(
+            [
+                ("p1", content, _page(content)),
+                (
+                    "p2",
+                    content,
+                    {
+                        **_page(content),
+                        "target_path": "src/other.py",
+                    },
+                ),
+            ]
+        )
+
+        with capture_logs() as logs:
+            found = await store.get_page_summaries_by_paths(
+                ["src/walker.py", "src/other.py"],
+                max_chars=STORED_SNIPPET_CHARS + 500,
+            )
+
+        assert {len(payload["summary"]) for payload in found.values()} == {
+            STORED_SNIPPET_CHARS
+        }
+        warnings = [
+            event
+            for event in logs
+            if event.get("event") == "vector_store.summary_read_exceeds_stored_width"
+        ]
+        assert len(warnings) == 1

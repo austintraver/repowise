@@ -14,7 +14,7 @@ import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from repowise.core.generation.models import GeneratedPage
+from repowise.core.generation.models import GeneratedPage, GenerationConfig
 from repowise.core.generation.page_generator.orchestrate import _GenerationRun
 
 
@@ -59,7 +59,7 @@ def _fake_run(store) -> SimpleNamespace:
         on_page_ready=None,
         vector_store=store,
         completed_page_summaries={},
-        config=SimpleNamespace(dependency_summary_chars=200),
+        config=GenerationConfig(),
     )
 
 
@@ -72,9 +72,7 @@ def _run_level(store) -> list[str]:
             return _page("reused.py", reused=True)
 
         run = _fake_run(store)
-        await _GenerationRun.run_level(
-            run, [("p1", fresh()), ("p2", reused())], level=2
-        )
+        await _GenerationRun.run_level(run, [("p1", fresh()), ("p2", reused())], level=2)
         return [pid for batch in store.batches for (pid, *_rest) in batch]
 
     return asyncio.run(_go())

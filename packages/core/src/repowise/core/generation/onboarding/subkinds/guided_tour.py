@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ...models import GUIDED_TOUR_SUMMARY_CHARS
 from ..registry import SubkindSpec, register
 from ..signals import OnboardingSignals
 from ..slots import SLOT_GUIDED_TOUR, SLOT_TITLES
@@ -52,7 +53,9 @@ def _build(signals: OnboardingSignals) -> GuidedTourContext | None:
     for s in signals.tour_stops:
         target = s.get("target_path", "")
         # The overview's summary is keyed by repo_name; file/infra pages by path.
-        summary = (signals.completed_page_summaries.get(target) or "").strip()[:240]
+        summary = (signals.completed_page_summaries.get(target) or "").strip()[
+            :GUIDED_TOUR_SUMMARY_CHARS
+        ]
         stops.append(
             TourStopContext(
                 order=int(s.get("order", len(stops) + 1)),

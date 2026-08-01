@@ -637,7 +637,7 @@ class _GenerationRun:
                     # Summary capture is cheap (string ops) — keep inline so
                     # the next page's context assembly sees it immediately.
                     self.completed_page_summaries[result.target_path] = overview_summary(
-                        result.content, 2 * self.config.dependency_summary_chars
+                        result.content, self.config.summary_reservoir_chars
                     )
                     # Progress tick fires the moment the page is ready.
                     if self.on_page_done is not None:
@@ -670,9 +670,7 @@ class _GenerationRun:
                             and getattr(self.vector_store, "persists_across_runs", False)
                         )
                     ):
-                        embed_items.append(
-                            _embed_item(result, self.config.dependency_summary_chars)
-                        )
+                        embed_items.append(_embed_item(result, self.config.summary_reservoir_chars))
                 return result
             except Exception as exc:
                 if self.job_system is not None and self.job_id is not None:
@@ -1005,7 +1003,7 @@ def _compute_kg_file_scores(kg_ctx: Any) -> dict[str, float]:
     return scores
 
 
-def _embed_item(page: GeneratedPage, summary_chars: int = 200) -> tuple[str, str, dict]:
+def _embed_item(page: GeneratedPage, reservoir_chars: int) -> tuple[str, str, dict]:
     """Build the ``(page_id, text, metadata)`` tuple for embedding.
 
     ``title`` is load-bearing, not decoration: it feeds the coverage rerank
@@ -1013,8 +1011,12 @@ def _embed_item(page: GeneratedPage, summary_chars: int = 200) -> tuple[str, str
     (as this did until 2026-07) left every page embedded at generation time
     with a blank title, while ``reindex`` and ``doctor --repair`` set it, so
     the store disagreed with itself depending on how a page got there.
+
+    ``content`` carries the whole page so each backend can apply its own
+    persistence policy. ``summary`` is the reservoir row, so it is written at
+    *reservoir_chars* (see ``GenerationConfig.summary_reservoir_chars``).
     """
-    summary = overview_summary(page.content, 2 * summary_chars)
+    summary = overview_summary(page.content, reservoir_chars)
     return (
         page.page_id,
         page.content,
@@ -1022,7 +1024,7 @@ def _embed_item(page: GeneratedPage, summary_chars: int = 200) -> tuple[str, str
             "title": page.title,
             "page_type": page.page_type,
             "target_path": page.target_path,
-            "content": page.content[: 3 * summary_chars],
+            "content": page.content,
             "summary": summary,
         },
     )
