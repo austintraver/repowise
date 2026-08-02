@@ -136,9 +136,11 @@ or configuration change was made as part of this investigation.
 
 ## Unknowns
 
-- The origin and intended rationale of Hoenn's explicit 32K LaunchAgent
-  setting was not found. Its creation predates this bakeoff and it is not
-  model specific.
+- A 2026-07-03 session recommended 32K as a way to reduce the context
+  footprint and cold-load cost of a 27 GB GGUF answer model. The LaunchAgent
+  was created about two weeks later, but no record was found that proves the
+  recommendation caused the setting. The surviving evidence supports treating
+  32K as a general host guardrail, not a Gemma 4 requirement.
 - The exact maximum comfortable context for the 26B MLX model on Hoenn while
   macOS and other applications are active has not been measured.
 - No executed comparison establishes that 32K, 64K, 128K, or 256K changes
