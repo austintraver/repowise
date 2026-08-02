@@ -257,8 +257,10 @@ def _select(
     thinly-connected repo still clears the gate.
 
     Progressive relaxation: tight caps first (prefer spread), then loosen so a
-    single-layer or single-file small repo still fills. Nouns are offered
-    before functions/methods within each pass.
+    single-layer or single-file small repo still fills. Select only nouns when
+    at least *min_count* suitable nouns survive; functions and methods are a
+    fallback for repositories whose public surface does not provide that many
+    types.
     """
     layer_cap = max(math.ceil(top / 2), 1)
     chosen: list[ConceptSymbol] = []
@@ -282,22 +284,27 @@ def _select(
             per_cluster[c.cluster] = per_cluster.get(c.cluster, 0) + 1
 
     def fill(pool: list[ConceptSymbol], limit: int) -> None:
-        nouns = [c for c in pool if c.kind in _NOUN_KINDS]
-        verbs = [c for c in pool if c.kind not in _NOUN_KINDS]
         # Pass 1-2: one per file, at most half the page from one cluster.
-        take(nouns, limit, file_cap=1, cluster_cap=layer_cap)
-        take(verbs, limit, file_cap=1, cluster_cap=layer_cap)
+        take(pool, limit, file_cap=1, cluster_cap=layer_cap)
         # Pass 3: still one per file, but let a genuinely dominant cluster fill
         # up (a single-layer repo has nowhere else to spread to).
-        take(nouns, limit, file_cap=1, cluster_cap=limit)
-        take(verbs, limit, file_cap=1, cluster_cap=limit)
+        take(pool, limit, file_cap=1, cluster_cap=limit)
         # Pass 4 (last resort, tiny repos): allow a second concept per file.
-        take(nouns, limit, file_cap=2, cluster_cap=limit)
-        take(verbs, limit, file_cap=2, cluster_cap=limit)
+        take(pool, limit, file_cap=2, cluster_cap=limit)
 
-    fill(primary, top)
+    primary_nouns = [concept for concept in primary if concept.kind in _NOUN_KINDS]
+    primary_verbs = [concept for concept in primary if concept.kind not in _NOUN_KINDS]
+    fill(primary_nouns, top)
+    if len(chosen) >= min_count:
+        return chosen
+
+    fill(primary_verbs, top)
     if len(chosen) < min_count and filler:
-        fill(filler, min_count)
+        filler_nouns = [concept for concept in filler if concept.kind in _NOUN_KINDS]
+        filler_verbs = [concept for concept in filler if concept.kind not in _NOUN_KINDS]
+        fill(filler_nouns, min_count)
+        if len(chosen) < min_count:
+            fill(filler_verbs, min_count)
     return chosen
 
 

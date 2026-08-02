@@ -12,6 +12,7 @@ from repowise.core.ingestion.models import ParsedFile, RepoStructure, Symbol
 
 from ..categories import file_category
 from ..models import GenerationConfig
+from ..repository_evidence import SourceExcerpt
 from .contexts import (
     ApiContractContext,
     ArchitectureDiagramContext,
@@ -590,6 +591,7 @@ class ContextAssembler:
         repo_name: str | None = None,
         external_systems: list[dict] | None = None,
         decision_records: list[dict] | None = None,
+        declared_purpose: SourceExcerpt | None = None,
     ) -> RepoOverviewContext:
         """Assemble context for the repo_overview template."""
         # Top files sorted by PageRank descending, path breaking ties. Leaf
@@ -651,6 +653,7 @@ class ContextAssembler:
             entry_points=repo_structure.entry_points,
             top_files_by_pagerank=top_files,
             circular_dependency_count=circular_count,
+            declared_purpose=declared_purpose,
             communities=communities_list,
             execution_flows=execution_flows_list,
             external_systems=external_systems or [],

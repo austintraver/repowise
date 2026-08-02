@@ -19,8 +19,10 @@ Design choices, all in the safe direction (never mangle a good page):
     source-code extension, or an identifier that is CamelCase / snake_case /
     dotted / ``::``-qualified. Lowercase single words (enum values like
     ``full``) are left alone.
-  - "Grounded" matching is generous (suffix / basename for paths, membership
-    for symbols) so legitimate abbreviations survive.
+  - A basename can ground a basename citation, but a path containing a
+    directory must match a supplied path exactly.
+  - A qualified path with a member suffix must ground both the path and the
+    member. A known type does not make an invented member valid.
   - Ungrounded tokens are demoted to plain text, not deleted, so sentences
     stay intact.
 
@@ -148,9 +150,17 @@ def collect_known(ctx: Any) -> tuple[set[str], set[str]]:
         if not token:
             continue
         if _looks_like_path(token):
-            head = token.split("::", 1)[0].split("#", 1)[0].strip()
+            path_and_member = token.split("::", 1)
+            head = path_and_member[0].split("#", 1)[0].strip()
             known_paths.add(head)
             known_paths.add(head.rsplit("/", 1)[-1])
+            if len(path_and_member) == 2:
+                member = path_and_member[1].strip()
+                known_symbols.add(f"{head}::{member}")
+                known_symbols.add(member)
+                for part in member.split("."):
+                    if part:
+                        known_symbols.add(part)
         # A string can carry both a path and a symbol vocabulary; also mine
         # bare identifiers as known symbols.
         if _looks_like_symbol(token):
@@ -163,23 +173,11 @@ def collect_known(ctx: Any) -> tuple[set[str], set[str]]:
 
 def _path_grounded(token: str, known_paths: set[str]) -> bool:
     head = token.split("::", 1)[0].split("#", 1)[0].strip()
-    if head in known_paths:
-        return True
-    base = head.rsplit("/", 1)[-1]
-    if base in known_paths:
-        return True
-    # Cited path is a suffix of a known path (or vice versa) - same file,
-    # different depth of qualification.
-    return any(kp.endswith("/" + head) or head.endswith("/" + kp) for kp in known_paths)
+    return head in known_paths
 
 
 def _symbol_grounded(token: str, known_symbols: set[str]) -> bool:
-    if token in known_symbols:
-        return True
-    # Grounded if any qualified segment is known (``Registry.get`` grounds on
-    # ``Registry``; a member of a known concept is acceptable).
-    parts = [p for p in re.split(r"\.|::", token) if p]
-    return any(p in known_symbols for p in parts)
+    return token in known_symbols
 
 
 def check_grounding(content: str, ctx: Any) -> tuple[str, list[str]]:
@@ -202,11 +200,14 @@ def check_grounding(content: str, ctx: Any) -> tuple[str, list[str]]:
         is_symbol = (not is_path) and _looks_like_symbol(token)
         if not is_path and not is_symbol:
             return match.group(0)
-        grounded = (
-            _path_grounded(token, known_paths)
-            if is_path
-            else _symbol_grounded(token, known_symbols)
-        )
+        if is_path:
+            grounded = _path_grounded(token, known_paths)
+            if grounded and "::" in token:
+                head = token.split("::", 1)[0].split("#", 1)[0].strip()
+                member = token.split("::", 1)[1].strip()
+                grounded = _symbol_grounded(f"{head}::{member}", known_symbols)
+        else:
+            grounded = _symbol_grounded(token, known_symbols)
         if grounded:
             return match.group(0)
         if token not in seen:

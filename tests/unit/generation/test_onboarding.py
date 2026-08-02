@@ -19,6 +19,7 @@ import jinja2
 import pytest
 
 from repowise.core.generation import onboarding
+from repowise.core.generation.context_assembler import ContextAssembler
 from repowise.core.generation.models import GENERATION_LEVELS, GeneratedPage
 from repowise.core.generation.onboarding.signals import OnboardingSignals
 from repowise.core.generation.onboarding.slots import (
@@ -39,6 +40,8 @@ from repowise.core.ingestion.models import (
     RepoStructure,
     Symbol,
 )
+from repowise.core.providers.llm.base import GeneratedResponse
+from repowise.core.providers.llm.mock import MockProvider
 from repowise.core.test_paths import is_test_related_path
 
 # ---------------------------------------------------------------------------
@@ -535,6 +538,150 @@ def test_how_it_works_marks_monorepo_flow_as_component_scoped() -> None:
     assert "Do not characterize the whole repository" in rendered
     assert "No repository-wide archetype is inferred" in rendered
     assert "## Detected archetype" not in rendered
+
+
+async def test_how_it_works_labels_non_entry_flow_as_internal_component_trace(
+    sample_config,
+) -> None:
+    spec = onboarding.get_spec(SLOT_HOW_IT_WORKS)
+    assert spec is not None
+    signals = _signals(
+        files=[
+            _file("src/server.py", is_entry_point=True, symbols=["main"]),
+            _file("src/readers/reader.py", symbols=["read"]),
+            _file("src/readers/parse.py", symbols=["parse"]),
+            _file("src/readers/store.py", symbols=["store"]),
+        ],
+        entry_points=["src/server.py"],
+        execution_flows=[
+            SimpleNamespace(
+                entry_point="src/readers/reader.py::read",
+                trace=[
+                    "src/readers/reader.py::read",
+                    "src/readers/parse.py::parse",
+                    "src/readers/store.py::store",
+                ],
+                score=0.9,
+            )
+        ],
+    )
+    provider = MockProvider()
+    generator = PageGenerator(
+        provider,
+        ContextAssembler(sample_config),
+        sample_config,
+    )
+
+    await generator.generate_onboarding_page(spec, signals)
+
+    prompt = str(provider.calls[0]["user_prompt"])
+    assert "internal component trace" in prompt
+    assert "## What this component does in one sentence" in prompt
+    assert "## Detected archetype" not in prompt
+
+    deterministic_config = dataclasses.replace(sample_config, deterministic=True)
+    deterministic_generator = PageGenerator(
+        MockProvider(),
+        ContextAssembler(deterministic_config),
+        deterministic_config,
+    )
+    deterministic_page = await deterministic_generator.generate_onboarding_page(
+        spec, signals
+    )
+    assert deterministic_page is not None
+    assert "internal component trace" in deterministic_page.content
+    assert "Traced from the entry points outward" not in deterministic_page.content
+
+
+async def test_how_it_works_pipeline_checks_qualified_path_members_and_signature_types(
+    sample_config,
+) -> None:
+    spec = onboarding.get_spec(SLOT_HOW_IT_WORKS)
+    assert spec is not None
+    attribution = _file(
+        "src/readers/codex/attribution.py",
+        is_entry_point=True,
+        symbols=["agent_speech"],
+    )
+    attribution.symbols[0] = dataclasses.replace(
+        attribution.symbols[0],
+        signature=(
+            "def agent_speech(entry: ConversationEntry) -> SessionReconstruction:"
+        ),
+    )
+    signals = _signals(
+        files=[
+            attribution,
+            _file("src/readers/codex/normalize.py", symbols=["normalize"]),
+            _file("src/readers/codex/store.py", symbols=["store"]),
+        ],
+        entry_points=["src/readers/codex/attribution.py"],
+        execution_flows=[
+            SimpleNamespace(
+                entry_point="src/readers/codex/attribution.py::agent_speech",
+                trace=[
+                    "src/readers/codex/attribution.py::agent_speech",
+                    "src/readers/codex/normalize.py::normalize",
+                    "src/readers/codex/store.py::store",
+                ],
+                score=0.9,
+            )
+        ],
+    )
+    raw_content = (
+        "## What this system does in one sentence\n\n"
+        "`src/readers/codex/attribution.py::agent_speech` accepts "
+        "`ConversationEntry` and returns `SessionReconstruction`.\n\n"
+        "## A walk through one example\n\n"
+        "The invented shortcut `src/attribution.py::agent_speech` is wrong, "
+        "as are `src/readers/codex/attribution.py::invented_member` and "
+        "`src/readers/codex/attribution.py::normalize`.\n\n"
+        "## What this trace establishes\n\nThe observed call continues.\n\n"
+        "## Where to read next\n\n"
+        "- `src/readers/codex/attribution.py` — begin here."
+    )
+    provider = MockProvider(
+        responses=[
+            GeneratedResponse(
+                content=raw_content,
+                input_tokens=10,
+                output_tokens=20,
+            )
+        ]
+    )
+    generator = PageGenerator(
+        provider,
+        ContextAssembler(sample_config),
+        sample_config,
+    )
+
+    page = await generator.generate_onboarding_page(spec, signals)
+
+    assert page is not None
+    assert "`src/readers/codex/attribution.py::agent_speech`" in page.content
+    assert "`ConversationEntry`" in page.content
+    assert "`SessionReconstruction`" in page.content
+    assert "`src/attribution.py::agent_speech`" not in page.content
+    assert "src/attribution.py::agent_speech" in page.content
+    assert "`src/readers/codex/attribution.py::invented_member`" not in page.content
+    assert "src/readers/codex/attribution.py::invented_member" in page.content
+    assert "`src/readers/codex/attribution.py::normalize`" not in page.content
+    assert "src/readers/codex/attribution.py::normalize" in page.content
+
+    stale_prior = dataclasses.replace(page, content=raw_content)
+    replay_provider = MockProvider()
+    replay_generator = PageGenerator(
+        replay_provider,
+        ContextAssembler(sample_config),
+        sample_config,
+        prior_pages={page.page_id: stale_prior},
+    )
+    replayed_page = await replay_generator.generate_onboarding_page(spec, signals)
+
+    assert replayed_page is not None
+    assert replay_provider.call_count == 0
+    assert "`src/attribution.py::agent_speech`" not in replayed_page.content
+    assert "reused_from_prior_run" not in replayed_page.metadata
 
 
 # ---------------------------------------------------------------------------

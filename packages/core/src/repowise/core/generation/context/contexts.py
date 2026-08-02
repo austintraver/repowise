@@ -8,6 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..repository_evidence import SourceExcerpt
+
 # ---------------------------------------------------------------------------
 # Context dataclasses — one per template
 # ---------------------------------------------------------------------------
@@ -173,6 +175,7 @@ class RepoOverviewContext:
     entry_points: list[str]
     top_files_by_pagerank: list[_TopFile]
     circular_dependency_count: int
+    declared_purpose: SourceExcerpt | None = None
     # Graph intelligence enrichment
     communities: list[dict] = field(default_factory=list)
     execution_flows: list[dict] = field(default_factory=list)

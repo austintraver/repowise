@@ -185,21 +185,6 @@ _MANIFEST_FILES: frozenset[str] = frozenset(
     {"pyproject.toml", "package.json", "Cargo.toml", "go.mod"}
 )
 
-# Entry-point evidence, all registry-derived: exact filenames (Main.kt,
-# config.ru), "*"-prefixed filename suffixes (OTP's <name>_app.erl), and
-# the flag-stem set. The historical
-# extra {run.py, server.py} patterns were dropped — the run/server stems
-# already cover them.
-_ENTRY_POINT_STEMS: frozenset[str] = _LANG_REGISTRY.entry_flag_stems()
-
-_ENTRY_POINT_NAMES: frozenset[str] = frozenset(
-    p for p in _LANG_REGISTRY.entry_point_names() if not p.startswith("*")
-)
-
-_ENTRY_POINT_NAME_SUFFIXES: tuple[str, ...] = tuple(
-    sorted(p[1:] for p in _LANG_REGISTRY.entry_point_names() if p.startswith("*"))
-)
-
 # Test-file conventions live in ``core.test_paths`` - the same code answers the
 # question at query time, so the flag stored here and the fallback the MCP
 # tools use can never disagree (#1103).
@@ -520,9 +505,7 @@ class FileTraverser:
             is_config=_is_config_file(language),
             is_api_contract=_is_api_contract(abs_path, language),
             is_entry_point=(
-                filename in _ENTRY_POINT_NAMES
-                or filename.endswith(_ENTRY_POINT_NAME_SUFFIXES)
-                or _stem_is_entry_point(abs_path)
+                _LANG_REGISTRY.is_entry_point_filename(language, filename)
                 or _is_console_script_target(rel_str, self._console_script_modules)
             ),
         )
@@ -701,11 +684,6 @@ def _has_openapi_root_key(abs_path: Path) -> bool:
     return isinstance(document, dict) and bool({"openapi", "swagger"} & document.keys())
 
 
-def _stem_is_entry_point(abs_path: Path) -> bool:
-    stem = abs_path.stem.lower()
-    return stem in _ENTRY_POINT_STEMS
-
-
 def _collect_console_script_modules(
     repo_root: Path, *, prune_nested_git: bool = True
 ) -> frozenset[str]:
@@ -803,7 +781,8 @@ def _find_entry_points_in(
             directory, prune_nested_git=prune_nested_git
         ):
             for fname in filenames:
-                if fname in _ENTRY_POINT_NAMES:
+                language = _detect_language(dirpath / fname)
+                if _LANG_REGISTRY.is_entry_point_filename(language, fname):
                     result.append((dirpath / fname).relative_to(repo_root).as_posix())
     except OSError:
         pass
