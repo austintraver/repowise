@@ -81,6 +81,15 @@ contexts require more memory and recommends at least 64K for agents, coding
 tools, and web search. These are host and workload policies, not model quality
 recommendations.
 
+The precedence was also executed on Hoenn with the installed
+`gemma4:12b-it-q4_K_M` artifact. With the LaunchAgent's 32K environment and no
+request override, Ollama served 32,768. Requests carrying `num_ctx=65536` and
+`num_ctx=262144` served 65,536 and 262,144 respectively. A separate temporary
+Ollama server with no context environment selected 262,144 automatically on
+the same 64 GiB host. The corresponding GGUF global KV allocations were 272
+MiB, 544 MiB, and 2,176 MiB, confirming both request precedence and the
+memory consequence on this backend.
+
 An explicit request, model option, or environment setting opts out of the
 scheduler's automatic context reduction after a load failure. Pinning 256K is
 therefore deterministic but less forgiving than allowing Ollama to choose and
@@ -97,9 +106,19 @@ Sources:
 
 ## Repowise's Current Contract
 
-Repowise does not currently select an Ollama context window. The native
-`/api/chat` request sends `num_predict`, temperature, top-p, and top-k, but not
-`num_ctx`.
+Repowise now accepts an optional context window in the provider section:
+
+```yaml
+ollama:
+  num_ctx: 262144
+```
+
+The native `/api/chat` generation request sends that value alongside
+`num_predict` and the configured sampling values. Omitting it preserves
+Ollama's model, environment, or automatic default. The value is included in
+Repowise's page reuse fingerprint and outline trace, so changing context under
+the same model tag cannot silently reuse pages generated with the earlier
+setting.
 
 The generation defaults separately allow:
 
@@ -113,11 +132,10 @@ basis for selecting a larger exact number yet: at least one module page
 assembly path does not enforce `token_budget`, while the measured bakeoff
 requests are much smaller than the configured ceiling.
 
-The next Repowise design decision should therefore not be “32K or 256K as a
-universal constant.” It should decide whether Repowise exposes an explicit
-Ollama context setting, how prompt and output bounds form its contract, and
-whether an unset value continues to defer to the model and server. No runtime
-or configuration change was made as part of this investigation.
+Repowise deliberately does not turn the setting into a universal constant.
+Prompt and output bounds still need a separate contract if they are ever to
+guarantee that an assembled request fits, while an unset context continues to
+defer to the model and server.
 
 ## Bakeoff Implications
 
