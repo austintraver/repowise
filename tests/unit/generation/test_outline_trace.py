@@ -136,6 +136,7 @@ async def test_trace_records_calls_decisions_and_replays_without_ollama(
         "top_p": 0.95,
     }
     assert artifact["calls"][0]["reasoning"] == "off"
+    assert artifact["calls"][0]["provider_options"] == {}
     assert artifact["calls"][0]["input_tokens"] == 101
     assert artifact["calls"][0]["cached_tokens"] == 7
     assert artifact["calls"][0]["stop_reason"] == "end_turn"

@@ -65,6 +65,7 @@ def generation_request_fingerprint(
     max_tokens: int,
     sampling: SamplingParameters,
     reasoning: str,
+    provider_options: dict[str, Any],
     source_salt: str = "",
 ) -> str:
     """Hash every request field that can change model-written page content.
@@ -85,6 +86,8 @@ def generation_request_fingerprint(
         "reasoning": reasoning,
         "source_salt": source_salt,
     }
+    if provider_options:
+        payload["provider_options"] = provider_options
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -461,6 +464,7 @@ class PageGenerator(PerTypeGenerationMixin, StructuralRenderMixin):
             max_tokens=self._config.max_tokens,
             sampling=self._config.sampling_parameters,
             reasoning=self._config.reasoning,
+            provider_options=self._provider.generation_request_options(),
             source_salt=source_salt,
         )
 

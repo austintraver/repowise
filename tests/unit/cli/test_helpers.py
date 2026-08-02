@@ -522,7 +522,10 @@ class TestResolveProviderBaseUrl:
         cfg = {
             "provider": "ollama",
             "model": "llama3",
-            "ollama": {"base_url": "http://ollama.local:11434"},
+            "ollama": {
+                "base_url": "http://ollama.local:11434",
+                "num_ctx": 262144,
+            },
         }
         repowise_dir = ensure_repowise_dir(tmp_path)
         config_path = repowise_dir / CONFIG_FILENAME
@@ -538,7 +541,9 @@ class TestResolveProviderBaseUrl:
             )
         else:
             config_path.write_text(
-                "provider: ollama\nmodel: llama3\nollama:\n  base_url: http://ollama.local:11434\n",
+                "provider: ollama\nmodel: llama3\nollama:\n"
+                "  base_url: http://ollama.local:11434\n"
+                "  num_ctx: 262144\n",
                 encoding="utf-8",
             )
 
@@ -547,6 +552,7 @@ class TestResolveProviderBaseUrl:
         assert result == "provider"
         assert captured["name"] == "ollama"
         assert captured["kwargs"].get("base_url") == "http://ollama.local:11434"
+        assert captured["kwargs"].get("num_ctx") == 262144
 
 
 # ---------------------------------------------------------------------------

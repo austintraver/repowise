@@ -19,6 +19,7 @@ from repowise.core.generation.page_generator.validation import InvalidGeneratedC
 from repowise.core.ingestion.models import ParsedFile, RepoStructure
 from repowise.core.providers.llm.base import GeneratedResponse
 from repowise.core.providers.llm.mock import MockProvider
+from repowise.core.providers.llm.ollama import OllamaProvider
 
 from .conftest import _make_file_info, _make_symbol
 
@@ -377,6 +378,27 @@ async def test_each_sampling_field_invalidates_persistent_page_reuse(
 
     assert changed_provider.call_count == 1
     assert regenerated.source_hash != original.source_hash
+
+
+def test_ollama_context_window_changes_generation_request_fingerprint():
+    config = GenerationConfig()
+    assembler = ContextAssembler(config)
+    default_generator = PageGenerator(
+        OllamaProvider(model="gemma4:26b-mxfp8"),
+        assembler,
+        config,
+    )
+    configured_generator = PageGenerator(
+        OllamaProvider(model="gemma4:26b-mxfp8", num_ctx=262144),
+        assembler,
+        config,
+    )
+
+    assert default_generator.generation_request_fingerprint(
+        "module_page", "Document this module."
+    ) != configured_generator.generation_request_fingerprint(
+        "module_page", "Document this module."
+    )
 
 
 # ---------------------------------------------------------------------------
