@@ -103,9 +103,9 @@ async def test_generate_auto_uses_native_chat_and_forwards_sampling():
     assert b'"think"' not in payload
     assert route.calls[0].request.extensions["timeout"] == {
         "connect": 5.0,
-        "read": 600.0,
-        "write": 600.0,
-        "pool": 600.0,
+        "read": None,
+        "write": None,
+        "pool": None,
     }
     assert result.usage["outbound_sampling"] == {
         "temperature": 1.0,

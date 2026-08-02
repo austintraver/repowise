@@ -147,10 +147,10 @@ class OllamaProvider(BaseProvider):
     # a load from disk on top. Two minutes covers a mid-size local model on a
     # laptop; the 30s default cancels one before it finishes warming up.
     interactive_timeout_s: float = 120.0
-    # Non-interactive documentation calls previously used OpenAI's 600-second
-    # read timeout. Keep that separate from the shorter answer-synthesis budget:
-    # local page generation can legitimately take several minutes.
-    generation_timeout_s: float = 600.0
+    # The output token limit bounds non-interactive documentation calls.
+    # Local generation speed varies enough that a wall-clock read deadline can
+    # cancel a valid response before the model reaches that explicit bound.
+    generation_timeout_s: float | None = None
 
     def __init__(
         self,

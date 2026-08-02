@@ -21,7 +21,11 @@ from repowise.core.generation.concept_tree.naming import (
     decode_response,
     deterministic_title,
 )
-from repowise.core.generation.concept_tree.planner import PlannerInputs, plan_outline
+from repowise.core.generation.concept_tree.planner import (
+    PlannerInputs,
+    plan_outline,
+    section_count_bounds,
+)
 from repowise.core.generation.concept_tree.validation import validate_outline
 
 TINY = GroupingParams(min_files=3, max_files=6)
@@ -65,6 +69,22 @@ class FakeProvider:
 
 
 class TestModelCannotBreakStructure:
+    @pytest.mark.parametrize("group_count", range(2, 25))
+    def test_section_bounds_can_avoid_single_page_sections(self, group_count):
+        minimum, maximum = section_count_bounds(group_count)
+
+        assert 1 <= minimum <= maximum
+        assert maximum <= max(1, group_count // 2)
+
+    @pytest.mark.asyncio
+    async def test_two_groups_receive_satisfiable_section_instructions(self):
+        provider = FakeProvider('{"sections":[],"names":{}}')
+
+        await plan_outline(_inputs(), provider=provider, params=TINY, repair=False)
+
+        assert len(group_files(FILES, params=TINY)) == 2
+        assert "Group the pages into 1 to 1 sections." in provider.calls[0]
+
     @pytest.mark.asyncio
     async def test_a_model_that_returns_nothing_still_covers_every_file(self):
         _outline, report = await plan_outline(

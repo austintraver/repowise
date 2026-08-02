@@ -61,6 +61,22 @@ MIN_SECTIONS = 5
 MAX_SECTIONS = 11
 
 
+def section_count_bounds(group_count: int) -> tuple[int, int]:
+    """Return section bounds that avoid singleton sections when possible."""
+    if group_count < 1:
+        return 0, 0
+
+    maximum_without_singletons = max(1, group_count // 2)
+    suggested_minimum = min(MIN_SECTIONS, max(2, group_count // 8))
+    suggested_maximum = max(
+        suggested_minimum + 1,
+        min(MAX_SECTIONS, group_count // 3 or 2),
+    )
+    maximum = min(suggested_maximum, maximum_without_singletons)
+    minimum = min(suggested_minimum, maximum)
+    return minimum, maximum
+
+
 @dataclass
 class PlannerInputs:
     """Everything the planner needs, already resolved by the caller.
@@ -475,8 +491,7 @@ async def name_groups(
         terms_bound=len(bound),
     )
 
-    sections_lo = min(MIN_SECTIONS, max(2, len(groups) // 8))
-    sections_hi = max(sections_lo + 1, min(MAX_SECTIONS, len(groups) // 3 or 2))
+    sections_lo, sections_hi = section_count_bounds(len(groups))
     instructions = NAMING_INSTRUCTIONS.format(
         repo=inputs.repo_name,
         min_words=2,
