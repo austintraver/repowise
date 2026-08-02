@@ -15,10 +15,11 @@ inventory, because hub files are infrastructure — ``models.py``, ``client.ts``
 ``__init__.py`` — and an outline built around them describes the plumbing
 rather than the product.
 
-Repo docs do not come in here as prose. Nine thousand characters of README
-injected alongside a 145-directory structural task collapsed the outline to
-three pages. Vocabulary arrives already bound to a group by
-:mod:`vocabulary`, as a short list of suggested names.
+Whole repository documents do not come in here as prose. Nine thousand
+characters of README injected alongside a 145-directory structural task
+collapsed the outline to three pages. Each group may instead carry one bounded
+piece of evidence assembled from module docstrings, and vocabulary arrives
+already bound to a group by :mod:`vocabulary` as a short suggested name.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 
@@ -40,6 +41,16 @@ MIN_TITLE_WORDS = 2
 
 _FENCE = re.compile(r"^```[a-zA-Z]*\n|\n```$")
 
+JsonParseOutcome = Literal["empty", "parsed", "recovered", "not_object", "invalid_json"]
+
+
+@dataclass(frozen=True)
+class JsonObjectParse:
+    """A decoded response plus the recovery path that produced it."""
+
+    value: dict[str, Any]
+    outcome: JsonParseOutcome
+
 
 def parse_json_object(content: str) -> dict[str, Any]:
     """Parse a JSON object out of a model response, tolerating decoration.
@@ -52,7 +63,14 @@ def parse_json_object(content: str) -> dict[str, Any]:
     Returns an empty dict rather than raising — an unparseable outline falls
     back to deterministic names, which is a worse wiki, not a broken run.
     """
+    return parse_json_object_result(content).value
+
+
+def parse_json_object_result(content: str) -> JsonObjectParse:
+    """Parse an object while retaining whether recovery was necessary."""
     text = (content or "").strip()
+    if not text:
+        return JsonObjectParse({}, "empty")
     if text.startswith("```"):
         text = "\n".join(line for line in text.split("\n") if not line.strip().startswith("```"))
     try:
@@ -60,12 +78,17 @@ def parse_json_object(content: str) -> dict[str, Any]:
     except (json.JSONDecodeError, ValueError):
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
-            return {}
+            return JsonObjectParse({}, "invalid_json")
         try:
             parsed = json.loads(match.group())
         except (json.JSONDecodeError, ValueError):
-            return {}
-    return parsed if isinstance(parsed, dict) else {}
+            return JsonObjectParse({}, "invalid_json")
+        if not isinstance(parsed, dict):
+            return JsonObjectParse({}, "not_object")
+        return JsonObjectParse(parsed, "recovered")
+    if not isinstance(parsed, dict):
+        return JsonObjectParse({}, "not_object")
+    return JsonObjectParse(parsed, "parsed")
 
 
 # ---------------------------------------------------------------------------
@@ -199,17 +222,22 @@ class NamedGroup:
     #: True when this name came from the fallback rather than the model, either
     #: because there was no provider or because the model skipped the group.
     fallback: bool = False
+    #: The candidate before fallback, retained so a trace can explain why the
+    #: effective title differs from the raw response.
+    candidate_title: str = ""
+    rejection_reason: str | None = None
 
 
 SYSTEM_PROMPT = (
     "You are an information architect naming the sections of a technical wiki "
-    "about a specific codebase, read by senior engineers and AI coding agents. "
+    "for an existing software project, read by senior engineers and AI coding "
+    "agents. "
     "You name and order groups of files that have already been decided for you. "
     "You never decide which files belong to which group. Reply with JSON only."
 )
 
 NAMING_INSTRUCTIONS = """\
-Below is the complete set of file groups for the `{repo}` codebase. The grouping \
+Below is the complete set of file groups for `{repo}`. The grouping \
 is fixed: every source file is in exactly one group, and you must not change, \
 merge, split or drop any group. A group can be one directory subtree or a run \
 of adjacent directory areas combined to avoid tiny pages. `target` is only the \
@@ -222,9 +250,9 @@ that the title and scope account for the whole group. Then order the sections.
 
 TITLES
 - Name the CAPABILITY or SUBSYSTEM, not the directory and not the layer. \
-Good: "Dependency Graph Construction", "Output Distillation", \
-"Code Health Scoring". Bad: "core/ingestion", "Ingestion Layer", \
-"Utilities and Helpers".
+Good titles describe what the software does rather than repeating where its \
+files sit. Do not use generic words such as "codebase", "components", \
+"utilities", or "helpers" in place of a supported capability.
 - {min_words} to {max_words} words. Every title must be unique.
 - An enumerative title is right only when a group genuinely spans several small \
 areas, e.g. "Dead Code, Security, and Change Risk".
@@ -413,6 +441,66 @@ def build_payload(
     return {"repo": "", "groups": entries_out}, index
 
 
+def build_group_summaries(
+    groups: list[ConceptGroup],
+    file_docstrings: dict[str, str],
+    *,
+    max_chars: int = 200,
+) -> dict[str, str]:
+    """Build bounded semantic evidence from module-level docstrings.
+
+    The first line of a module docstring is normally its authored purpose. A
+    group receives those purpose lines in stable file order, with directories
+    taking turns so one area cannot consume the whole allowance. Missing
+    docstrings yield no summary rather than invented semantics.
+    """
+    summaries: dict[str, str] = {}
+    for group in groups:
+        members_by_directory: dict[str, list[str]] = {}
+        for member in sorted(group.members):
+            if not file_docstrings.get(member, "").strip():
+                continue
+            directory = member.rsplit("/", 1)[0]
+            members_by_directory.setdefault(directory, []).append(member)
+
+        ordered_members: list[str] = []
+        depth = 0
+        directories = sorted(members_by_directory)
+        while directories:
+            added = False
+            for directory in directories:
+                members = members_by_directory[directory]
+                if depth < len(members):
+                    ordered_members.append(members[depth])
+                    added = True
+            if not added:
+                break
+            depth += 1
+
+        parts: list[str] = []
+        for member in ordered_members:
+            lines = [line.strip() for line in file_docstrings[member].splitlines() if line.strip()]
+            prose = " ".join(lines[0].split()) if lines else ""
+            if not prose:
+                continue
+            basename = member.rsplit("/", 1)[-1]
+            candidate = f"{basename}: {prose}"
+            separator_chars = 3 if parts else 0
+            remaining = max_chars - sum(len(part) for part in parts) - separator_chars * len(parts)
+            if remaining <= 0:
+                break
+            if len(candidate) > remaining:
+                candidate = candidate[:remaining].rsplit(" ", 1)[0].rstrip()
+            if candidate:
+                parts.append(candidate)
+            if sum(len(part) for part in parts) + 3 * max(0, len(parts) - 1) >= max_chars:
+                break
+        summary = " | ".join(parts)
+        if summary:
+            summaries[group.target_path] = summary
+    return summaries
+
+
 _MAX_TITLE_CHARS = 120
 
 
@@ -488,12 +576,20 @@ def decode_response(
 
     named: list[NamedGroup] = []
     for gid, group in index.items():
-        entry = names.get(gid)
-        entry = entry if isinstance(entry, dict) else {}
+        raw_entry = names.get(gid)
+        entry = raw_entry if isinstance(raw_entry, dict) else {}
         title = _clean_title(entry.get("title"))
+        candidate_title = title
         scope = str(entry.get("scope") or "").strip()
         fallback = False
-        if not title or not has_complete_area_receipt(entry, group):
+        rejection_reason: str | None = None
+        if not isinstance(raw_entry, dict):
+            rejection_reason = "missing_name"
+        elif not title:
+            rejection_reason = "invalid_title"
+        elif not has_complete_area_receipt(entry, group):
+            rejection_reason = "incomplete_area_receipt"
+        if rejection_reason is not None:
             title = deterministic_title(group, labels.get(group.dominant_layer, ""))
             scope = deterministic_scope(group)
             fallback = True
@@ -508,6 +604,8 @@ def decode_response(
                 section=section,
                 order=order_of.get(gid, len(index) + len(named)),
                 fallback=fallback,
+                candidate_title=candidate_title,
+                rejection_reason=rejection_reason,
             )
         )
 

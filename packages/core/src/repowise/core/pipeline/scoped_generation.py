@@ -38,6 +38,7 @@ from repowise.core.generation.scope import (
     build_dependencies,
     load_page_records,
 )
+from repowise.core.pipeline.repository_identity import repository_generation_name
 
 logger = structlog.get_logger(__name__)
 
@@ -151,7 +152,7 @@ async def rehydrate_repo(
         include_nested_repos=include_nested_repos,
     )
 
-    repo_name = repo_path.name
+    repo_name = repository_generation_name(repo_path)
     kg_ctx = load_kg_context(repo_path)
     # build_dependencies runs select_pages, which forces pagerank / betweenness /
     # community detection on the rehydrated graph — seconds of pure CPU on a large
@@ -231,6 +232,7 @@ async def execute_scoped_generation(
         cost_tracker=cost_tracker,
         generation_config=generation_config,
         only_page_ids=plan.generate_ids,
+        repo_name=rehydrated.repo_name,
     )
     if cost_tracker is not None:
         await cost_tracker.flush()

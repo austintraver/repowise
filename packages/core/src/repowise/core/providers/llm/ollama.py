@@ -323,6 +323,7 @@ class OllamaProvider(BaseProvider):
             cached_tokens=0,
             stop_reason=stop_reason,
             provider_stop_reason=provider_stop_reason,
+            provider_response=response_data,
             usage={
                 "prompt_tokens": input_tokens,
                 "completion_tokens": output_tokens,

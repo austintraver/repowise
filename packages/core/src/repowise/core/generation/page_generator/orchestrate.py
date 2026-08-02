@@ -352,7 +352,14 @@ class _GenerationRun:
             self._apply_frozen_outline(str(frozen_source))
             return
 
+        from ..concept_tree.naming import build_group_summaries
         from ..concept_tree.planner import PlannerInputs, name_groups
+
+        file_docstrings = {
+            parsed.file_info.path: parsed.docstring
+            for parsed in self.parsed_files
+            if getattr(parsed, "docstring", None)
+        }
 
         inputs = PlannerInputs(
             repo_name=self.repo_name or "",
@@ -363,11 +370,17 @@ class _GenerationRun:
             production_files=[m for g in groups for m in g.members],
             repo_root=Path(self.repo_path) if self.repo_path else None,
             layer_labels=dict(getattr(self.selection, "layer_labels", None) or {}),
+            summaries=build_group_summaries(groups, file_docstrings),
             entry_points={
                 p.file_info.path
                 for p in self.parsed_files
                 if getattr(p.file_info, "is_entry_point", False)
             },
+        )
+        trace_path = (
+            self.job_system.outline_trace_path(self.job_id)
+            if self.job_system is not None and self.job_id is not None
+            else None
         )
 
         try:
@@ -377,6 +390,8 @@ class _GenerationRun:
                 provider=provider,
                 reasoning=getattr(self.config, "reasoning", None),
                 sampling=self.config.sampling_parameters,
+                trace_path=trace_path,
+                job_id=self.job_id,
             )
         except Exception as exc:
             # ``name_groups`` guards the call and the decode itself, so reaching

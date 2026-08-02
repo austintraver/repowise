@@ -1,0 +1,36 @@
+@ollama = http://localhost:11434
+@repowise = http://localhost:7337
+@model = gemma4:26b-mxfp8-ctx256k
+
+### Installed Ollama models
+GET {{ollama}}/api/tags
+Accept: application/json
+
+### Models currently loaded by Ollama
+GET {{ollama}}/api/ps
+Accept: application/json
+
+### Minimal native Ollama chat probe with the bakeoff sampling values
+POST {{ollama}}/api/chat
+Content-Type: application/json
+
+{
+  "model": "{{model}}",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Reply with exactly: ready"
+    }
+  ],
+  "stream": false,
+  "think": false,
+  "options": {
+    "temperature": 0.3,
+    "top_p": 0.95,
+    "top_k": 64
+  }
+}
+
+### Repowise API schema
+GET {{repowise}}/openapi.json
+Accept: application/json

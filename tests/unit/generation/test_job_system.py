@@ -286,3 +286,15 @@ def test_get_completed_page_ids_correct_set(tmp_path):
     js.complete_page(job_id, "module_page:pkg")
     ids = js.get_completed_page_ids(job_id)
     assert ids == {"file_page:x.py", "module_page:pkg"}
+
+
+def test_outline_trace_path_is_inside_a_job_subdirectory(tmp_path):
+    js = _make_system(tmp_path)
+    job_id = _create(js)
+
+    trace_path = js.outline_trace_path(job_id)
+    trace_path.parent.mkdir(parents=True)
+    trace_path.write_text("{}\n", encoding="utf-8")
+
+    assert trace_path == tmp_path / "jobs" / job_id / "outline.json"
+    assert len(js.list_jobs()) == 1

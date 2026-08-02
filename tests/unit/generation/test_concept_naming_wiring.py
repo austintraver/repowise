@@ -14,9 +14,11 @@ is, or whether the run finishes.
 from __future__ import annotations
 
 import json
+import subprocess
 
 from repowise.core.generation.concept_tree.grouping import ConceptGroup
 from repowise.core.generation.concept_tree.planner import PlannerInputs, name_groups
+from repowise.core.generation.concept_tree.trace import load_outline_trace
 from repowise.core.pipeline import run_pipeline
 from repowise.core.pipeline.modes import OrchestratorMode
 from repowise.core.providers.llm.base import GeneratedResponse, SamplingParameters
@@ -131,6 +133,40 @@ async def test_the_namer_runs_on_the_real_generation_path(tmp_path):
     assert any(
         p.title.startswith("Title ") for p in pages
     ), f"no model title reached a page: {[p.title for p in pages]}"
+
+
+async def test_real_path_traces_project_identity_and_module_evidence(tmp_path):
+    """A synthetic checkout folder must not become the project's identity."""
+    repo = _write_repo(tmp_path / "baseline")
+    (repo / "src" / "ingest" / "mod0.py").write_text(
+        '"""Coordinates transcript ingestion and source normalization."""\n'
+        "def ingest_0() -> int:\n"
+        "    return 0\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "remote", "add", "origin", "/sources/recollection"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    provider = NamingProvider(
+        _naming_payload_for({f"g{i:02d}": f"Title {i}" for i in range(1, 21)})
+    )
+
+    result = await _run(repo, provider)
+
+    trace_paths = list((repo / ".repowise" / "jobs").glob("*/outline.json"))
+    assert len(trace_paths) == 1
+    artifact = load_outline_trace(trace_paths[0])
+    assert result.repo_name == "baseline"
+    assert artifact["repo_name"] == "recollection"
+    assert artifact["job_id"] == trace_paths[0].parent.name
+    assert artifact["calls"][0]["request_id"] == (
+        f"{artifact['job_id']}:outline:initial"
+    )
+    assert "Coordinates transcript ingestion" in artifact["calls"][0]["user_prompt"]
 
 
 async def test_the_keyless_path_never_calls_a_namer(tmp_path):

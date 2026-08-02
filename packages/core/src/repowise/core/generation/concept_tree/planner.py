@@ -15,14 +15,16 @@ from __future__ import annotations
 
 import contextlib
 import json
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import structlog
 
-from repowise.core.providers.llm.base import SamplingParameters
+from repowise.core.providers.llm.base import GeneratedResponse, SamplingParameters
 
 from .grouping import ConceptGroup, GroupingParams, group_files, params_for
 from .models import ConceptOutline, ConceptPage, ConceptSection, OutlineReport
@@ -39,7 +41,14 @@ from .naming import (
     disambiguate_titles,
     ground_scopes,
     has_complete_area_receipt,
-    parse_json_object,
+    parse_json_object_result,
+)
+from .trace import (
+    FinalTitleTrace,
+    OutlineCallTrace,
+    OutlineGroupTrace,
+    OutlineTraceRecorder,
+    TitleAttemptTrace,
 )
 from .validation import validate_outline
 from .vocabulary import bind_terms, extract_terms
@@ -217,7 +226,7 @@ def plan_deterministic(
 
 
 _REPAIR_INSTRUCTIONS = """\
-These page titles from the outline you just produced need fixing. Nothing else \
+These page titles for `{repo}` need fixing. Nothing else \
 about the outline is changing — do not restructure it, and do not rename any \
 page that is not listed here.
 
@@ -274,17 +283,17 @@ def _usable_scope(scope: str, target_path: str) -> bool:
     return "/" not in text.split(" ", 1)[0] or " " in text.strip()
 
 
-def _force_unique_titles(outline: ConceptOutline) -> int:
-    """Qualify any title still shared by two pages. Returns how many moved."""
+def _force_unique_titles(outline: ConceptOutline) -> set[str]:
+    """Qualify shared titles and return the structural keys that changed."""
     pages = outline.pages
     unique = disambiguate_titles([(p.title, p.target_path) for p in pages])
-    changed = 0
+    changed: set[str] = set()
     for page, title in zip(pages, unique, strict=True):
         if title != page.title:
             page.title = title
-            changed += 1
+            changed.add(page.structural_key)
     if changed:
-        logger.info("concept_outline_titles_disambiguated", changed=changed)
+        logger.info("concept_outline_titles_disambiguated", changed=len(changed))
     return changed
 
 
@@ -305,6 +314,66 @@ def _repair_targets(outline: ConceptOutline, report: OutlineReport) -> set[str]:
     return targets
 
 
+def build_trace_groups(
+    index: dict[str, ConceptGroup],
+    named: list[NamedGroup],
+    outline: ConceptOutline,
+    *,
+    layer_labels: dict[str, str],
+    repair_outcomes: dict[str, TitleAttemptTrace] | None = None,
+    disambiguated_keys: set[str] | None = None,
+) -> list[OutlineGroupTrace]:
+    """Describe how every structural group reached its current title."""
+    named_by_key = {entry.group.structural_key: entry for entry in named}
+    page_by_key = {page.structural_key: page for page in outline.pages}
+    repairs = repair_outcomes or {}
+    disambiguated = disambiguated_keys or set()
+    records: list[OutlineGroupTrace] = []
+    for group_id, group in index.items():
+        entry = named_by_key[group.structural_key]
+        page = page_by_key[group.structural_key]
+        if entry.fallback:
+            initial_status = "missing" if entry.rejection_reason == "missing_name" else "rejected"
+        else:
+            initial_status = "accepted"
+        initial = TitleAttemptTrace(
+            candidate_title=entry.candidate_title or None,
+            status=initial_status,
+            reason=entry.rejection_reason,
+        )
+        repair_attempt = repairs.get(
+            group_id,
+            TitleAttemptTrace(candidate_title=None, status="not_requested"),
+        )
+        if group.structural_key in disambiguated:
+            final_source = "disambiguation"
+        elif repair_attempt.status == "accepted":
+            final_source = "repair"
+        elif entry.fallback:
+            final_source = "fallback"
+        else:
+            final_source = "initial"
+        records.append(
+            OutlineGroupTrace(
+                group_id=group_id,
+                structural_key=group.structural_key,
+                target_path=group.target_path,
+                fallback_title=deterministic_title(
+                    group,
+                    layer_labels.get(group.dominant_layer, ""),
+                ),
+                initial=initial,
+                repair=repair_attempt,
+                final=FinalTitleTrace(
+                    title=page.title,
+                    source=final_source,
+                    disambiguated=group.structural_key in disambiguated,
+                ),
+            )
+        )
+    return records
+
+
 async def plan_outline(
     inputs: PlannerInputs,
     *,
@@ -314,6 +383,8 @@ async def plan_outline(
     repair: bool = True,
     reasoning: str | None = None,
     sampling: SamplingParameters | None = None,
+    trace_path: Path | None = None,
+    job_id: str | None = None,
 ) -> tuple[ConceptOutline, OutlineReport]:
     """Group *inputs* and produce a validated outline over that grouping."""
     groups = group_files(inputs.production_files, layer_of_file=inputs.layer_of_file, params=params)
@@ -326,6 +397,8 @@ async def plan_outline(
         repair=repair,
         reasoning=reasoning,
         sampling=sampling,
+        trace_path=trace_path,
+        job_id=job_id,
     )
 
 
@@ -339,6 +412,8 @@ async def name_groups(
     repair: bool = True,
     reasoning: str | None = None,
     sampling: SamplingParameters | None = None,
+    trace_path: Path | None = None,
+    job_id: str | None = None,
 ) -> tuple[ConceptOutline, OutlineReport]:
     """Name and section an already-computed partition, then validate it.
 
@@ -363,6 +438,18 @@ async def name_groups(
             max_files_per_page=resolved.max_files,
         )
         return outline, report
+
+    trace_recorder: OutlineTraceRecorder | None = None
+    if trace_path is not None:
+        if not job_id:
+            raise ValueError("job_id is required when outline tracing is enabled")
+        trace_recorder = OutlineTraceRecorder(
+            trace_path,
+            job_id=job_id,
+            repo_name=inputs.repo_name,
+            provider=str(getattr(provider, "provider_name", "")),
+            model=str(getattr(provider, "model_name", "")),
+        )
 
     payload, index = build_payload(
         groups,
@@ -398,20 +485,51 @@ async def name_groups(
         max_sections=sections_hi,
     )
     body = json.dumps(payload, separators=(",", ":"))
+    initial_prompt = instructions + body
+    initial_request_id = f"{job_id}:outline:initial" if job_id else None
 
     data: dict[str, Any] = {}
+    initial_response: GeneratedResponse | None = None
+    initial_error: BaseException | None = None
+    initial_parse_outcome = "not_attempted"
+    initial_started_at = datetime.now(UTC).isoformat()
+    initial_started_clock = time.monotonic()
     try:
         with _billed_as(provider, COST_OPERATION):
-            response = await provider.generate(
+            initial_response = await provider.generate(
                 system_prompt=SYSTEM_PROMPT,
-                user_prompt=instructions + body,
+                user_prompt=initial_prompt,
                 max_tokens=16000,
                 sampling=resolved_sampling,
+                request_id=initial_request_id,
                 **_reasoning_kwargs(reasoning),
             )
-        data = parse_json_object(getattr(response, "content", "") or "")
+        parsed = parse_json_object_result(initial_response.content or "")
+        data = parsed.value
+        initial_parse_outcome = parsed.outcome
     except Exception as exc:
+        initial_error = exc
         logger.warning("concept_outline_naming_failed", error=str(exc))
+    finally:
+        if trace_recorder is not None:
+            trace_recorder.append_call(
+                OutlineCallTrace.from_result(
+                    stage="initial",
+                    request_id=initial_request_id,
+                    started_at=initial_started_at,
+                    duration_seconds=time.monotonic() - initial_started_clock,
+                    provider=str(getattr(provider, "provider_name", "")),
+                    model=str(getattr(provider, "model_name", "")),
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=initial_prompt,
+                    max_tokens=16000,
+                    sampling=resolved_sampling.configured(),
+                    reasoning=reasoning or "auto",
+                    response=initial_response,
+                    parse_outcome=initial_parse_outcome,
+                    error=initial_error,
+                )
+            )
 
     # Decoding sits inside the guard too. It used to sit outside, which meant a
     # response that parsed as JSON but held the wrong shape reached the decoder
@@ -428,7 +546,6 @@ async def name_groups(
 
     outline = _build_outline(named)
     _merge_thin_sections(outline)
-    outline.naming_mode = "llm" if any(not n.fallback for n in named) else "deterministic"
     outline.vocabulary = {bound[gid]: index[gid].target_path for gid in bound}
 
     report = validate_outline(
@@ -438,17 +555,30 @@ async def name_groups(
         max_files_per_page=resolved.max_files,
     )
     report.invented_paths = sorted(set(report.invented_paths) | set(ungrounded))
+    if trace_recorder is not None:
+        trace_recorder.set_groups(
+            build_trace_groups(index, named, outline, layer_labels=inputs.layer_labels)
+        )
 
+    repair_outcomes: dict[str, TitleAttemptTrace] = {}
     if repair:
         targets = _repair_targets(outline, report)
         if targets:
-            await _repair_titles(
+            repair_outcomes = await _repair_titles(
                 outline,
                 index,
                 targets,
                 provider=provider,
+                repo_name=inputs.repo_name,
+                evidence_by_gid={
+                    str(entry["id"]): dict(entry)
+                    for entry in payload["groups"]
+                    if isinstance(entry, dict) and "id" in entry
+                },
                 reasoning=reasoning,
                 sampling=resolved_sampling,
+                trace_recorder=trace_recorder,
+                job_id=job_id,
             )
             # Repair writes new prose, so it has to face the same citation
             # check the first pass did. Grounding after the last write rather
@@ -469,7 +599,8 @@ async def name_groups(
     # lost when two titles collide, but a reader sees two identical rows and
     # cannot tell which is which. Qualifying them by path is the same rule the
     # deterministic path already applies, and it cannot fail.
-    if _force_unique_titles(outline):
+    disambiguated_keys = _force_unique_titles(outline)
+    if disambiguated_keys:
         report = validate_outline(
             outline,
             all_files=all_files,
@@ -477,6 +608,22 @@ async def name_groups(
             max_files_per_page=resolved.max_files,
         )
         report.invented_paths = sorted(set(report.invented_paths) | set(ungrounded))
+
+    if trace_recorder is not None:
+        trace_recorder.set_groups(
+            build_trace_groups(
+                index,
+                named,
+                outline,
+                layer_labels=inputs.layer_labels,
+                repair_outcomes=repair_outcomes,
+                disambiguated_keys=disambiguated_keys,
+            )
+        )
+
+    outline.naming_mode = (
+        "llm" if any(page.named_by_model for page in outline.pages) else "deterministic"
+    )
 
     logger.info(
         "concept_outline_planned",
@@ -500,9 +647,13 @@ async def _repair_titles(
     targets: set[str],
     *,
     provider: Any,
+    repo_name: str,
+    evidence_by_gid: dict[str, dict[str, Any]],
     reasoning: str | None = None,
     sampling: SamplingParameters | None = None,
-) -> None:
+    trace_recorder: OutlineTraceRecorder | None = None,
+    job_id: str | None = None,
+) -> dict[str, TitleAttemptTrace]:
     """Re-ask for just the failing titles, then apply only what improved.
 
     A repair that made things worse is discarded: the replacement has to be
@@ -512,28 +663,31 @@ async def _repair_titles(
     gid_of = {g.structural_key: gid for gid, g in index.items()}
     failing = [p for p in outline.pages if p.title in targets]
     if not failing:
-        return
+        return {}
     taken = sorted({p.title for p in outline.pages if p.title not in targets})
 
-    lines = []
+    lines: list[str] = []
     for page in failing:
         gid = gid_of.get(page.structural_key, "")
-        names = sorted(m.rsplit("/", 1)[-1] for m in page.members)[:6]
+        evidence = dict(evidence_by_gid.get(gid, {}))
+        if not evidence:
+            evidence = {
+                "id": gid,
+                "target": page.target_path,
+                "files": len(page.members),
+                "names": sorted(m.rsplit("/", 1)[-1] for m in page.members)[:6],
+                "areas": build_group_areas(page.group),
+            }
+        evidence["current_title"] = page.title
         lines.append(
             json.dumps(
-                {
-                    "id": gid,
-                    "current_title": page.title,
-                    "dir": page.target_path,
-                    "files": len(page.members),
-                    "names": names,
-                    "areas": build_group_areas(page.group),
-                },
+                evidence,
                 separators=(",", ":"),
             )
         )
 
     prompt = _REPAIR_INSTRUCTIONS.format(
+        repo=repo_name,
         min_words=2,
         max_words=7,
         taken="\n".join(f"- {t}" for t in taken) or "(none)",
@@ -547,33 +701,115 @@ async def _repair_titles(
     # could have been recovered ships with every title derived from a path.
     # Observed on this repository at 82 groups.
     budget = max(2000, min(16000, 200 + 150 * len(failing)))
+    resolved_sampling = sampling or SamplingParameters(temperature=0.2)
+    repair_request_id = f"{job_id}:outline:repair" if job_id else None
+    repair_response: GeneratedResponse | None = None
+    repair_error: BaseException | None = None
+    repair_parse_outcome = "not_attempted"
+    repair_started_at = datetime.now(UTC).isoformat()
+    repair_started_clock = time.monotonic()
+    data: dict[str, Any] = {}
     try:
         with _billed_as(provider, COST_OPERATION):
-            response = await provider.generate(
+            repair_response = await provider.generate(
                 system_prompt=SYSTEM_PROMPT,
                 user_prompt=prompt,
                 max_tokens=budget,
-                sampling=sampling or SamplingParameters(temperature=0.2),
+                sampling=resolved_sampling,
+                request_id=repair_request_id,
                 **_reasoning_kwargs(reasoning),
             )
-        data = parse_json_object(getattr(response, "content", "") or "")
+        parsed = parse_json_object_result(repair_response.content or "")
+        data = parsed.value
+        repair_parse_outcome = parsed.outcome
     except Exception as exc:
+        repair_error = exc
         logger.warning("concept_outline_repair_failed", error=str(exc))
-        return
+    finally:
+        if trace_recorder is not None:
+            trace_recorder.append_call(
+                OutlineCallTrace.from_result(
+                    stage="repair",
+                    request_id=repair_request_id,
+                    started_at=repair_started_at,
+                    duration_seconds=time.monotonic() - repair_started_clock,
+                    provider=str(getattr(provider, "provider_name", "")),
+                    model=str(getattr(provider, "model_name", "")),
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=prompt,
+                    max_tokens=budget,
+                    sampling=resolved_sampling.configured(),
+                    reasoning=reasoning or "auto",
+                    response=repair_response,
+                    parse_outcome=repair_parse_outcome,
+                    error=repair_error,
+                )
+            )
+
+    outcomes: dict[str, TitleAttemptTrace] = {}
+    if repair_error is not None:
+        for page in failing:
+            gid = gid_of.get(page.structural_key, "")
+            outcomes[gid] = TitleAttemptTrace(
+                candidate_title=None,
+                status="error",
+                reason=type(repair_error).__name__,
+            )
+        return outcomes
 
     names = data.get("names")
     if not isinstance(names, dict):
-        return
+        for page in failing:
+            gid = gid_of.get(page.structural_key, "")
+            outcomes[gid] = TitleAttemptTrace(
+                candidate_title=None,
+                status="missing",
+                reason="missing_names_object",
+            )
+        return outcomes
+
     in_use = {p.title.lower() for p in outline.pages}
     fixed = 0
     for page in failing:
         gid = gid_of.get(page.structural_key, "")
         entry = names.get(gid)
-        if not isinstance(entry, dict) or not has_complete_area_receipt(entry, page.group):
+        if not isinstance(entry, dict):
+            outcomes[gid] = TitleAttemptTrace(
+                candidate_title=None,
+                status="missing",
+                reason="missing_name",
+            )
             continue
-        title = str(entry.get("title") or "").strip()
+        raw_title = entry.get("title")
+        title = raw_title.strip() if isinstance(raw_title, str) else ""
+        if not has_complete_area_receipt(entry, page.group):
+            outcomes[gid] = TitleAttemptTrace(
+                candidate_title=title or None,
+                status="rejected",
+                reason="incomplete_area_receipt",
+            )
+            continue
         words = len(title.split())
-        if not title or not (2 <= words <= 7) or title.lower() in in_use:
+        if not title:
+            outcomes[gid] = TitleAttemptTrace(
+                candidate_title=None,
+                status="rejected",
+                reason="invalid_title",
+            )
+            continue
+        if not 2 <= words <= 7:
+            outcomes[gid] = TitleAttemptTrace(
+                candidate_title=title,
+                status="rejected",
+                reason="bad_title_length",
+            )
+            continue
+        if title.lower() in in_use:
+            outcomes[gid] = TitleAttemptTrace(
+                candidate_title=title,
+                status="rejected",
+                reason="duplicate_title",
+            )
             continue
         in_use.discard(page.title.lower())
         in_use.add(title.lower())
@@ -582,5 +818,10 @@ async def _repair_titles(
         scope = str(entry.get("scope") or "").strip()
         if _usable_scope(scope, page.target_path):
             page.scope = scope
+        outcomes[gid] = TitleAttemptTrace(
+            candidate_title=title,
+            status="accepted",
+        )
         fixed += 1
     logger.info("concept_outline_repaired", requested=len(failing), applied=fixed)
+    return outcomes

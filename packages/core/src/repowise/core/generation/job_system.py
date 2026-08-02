@@ -236,6 +236,10 @@ class JobSystem:
         """Return the set of already-completed page IDs for *job_id*."""
         return set(self._load(job_id).completed_page_ids)
 
+    def outline_trace_path(self, job_id: str) -> Path:
+        """Return the local diagnostic artifact path for one job's outline."""
+        return self._jobs_dir / job_id / "outline.json"
+
     def list_jobs(self) -> list[Checkpoint]:
         """Return all jobs sorted by created_at descending."""
         checkpoints: list[Checkpoint] = []

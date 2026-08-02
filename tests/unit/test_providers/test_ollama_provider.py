@@ -80,7 +80,10 @@ async def test_generate_auto_uses_native_chat_and_forwards_sampling():
         return_value=httpx.Response(
             200,
             json={
-                "message": {"content": "# Doc\nContent."},
+                "message": {
+                    "content": "# Doc\nContent.",
+                    "thinking": "I should describe the module.",
+                },
                 "prompt_eval_count": 120,
                 "eval_count": 60,
                 "done_reason": "stop",
@@ -108,6 +111,15 @@ async def test_generate_auto_uses_native_chat_and_forwards_sampling():
         "temperature": 1.0,
         "top_p": 0.95,
         "top_k": 64,
+    }
+    assert result.provider_response == {
+        "message": {
+            "content": "# Doc\nContent.",
+            "thinking": "I should describe the module.",
+        },
+        "prompt_eval_count": 120,
+        "eval_count": 60,
+        "done_reason": "stop",
     }
 
 

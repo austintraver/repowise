@@ -291,6 +291,10 @@ class GeneratedResponse:
                        and ``tool_use``).
         provider_stop_reason:
                        Provider-native completion reason retained for diagnosis.
+        provider_response:
+                       Provider-native response data retained when the adapter can
+                       expose a JSON-compatible object. Callers must not assume it
+                       exists; it is intended for narrow local diagnostics.
     """
 
     content: str
@@ -301,6 +305,7 @@ class GeneratedResponse:
     decisions: list[dict] | None = None
     stop_reason: str | None = None
     provider_stop_reason: str | None = None
+    provider_response: dict[str, Any] | None = None
 
     @property
     def total_tokens(self) -> int:

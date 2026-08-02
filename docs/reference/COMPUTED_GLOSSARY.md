@@ -262,7 +262,8 @@ workspace overlays, MCP responses, and CLI output.
 | FTS5 query | Stop-word-stripped OR prefix query for SQLite. | `_build_fts5_query()` | `"auth"* OR "session"*` |
 | FTS score | Positive score from negated SQLite rank or Postgres `ts_rank`. | `FullTextSearch` | `0.734` |
 | Vector score | Cosine similarity between query embedding and page embedding. | `InMemoryVectorStore.search()` and other vector stores | `0.812` |
-| Snippet | First 200 chars of indexed content. | `_snippet()` or vector metadata | `"This module handles..."` |
+| Search snippet | A short excerpt returned with a search hit; the fallback is the first 200 chars when no matched passage is available. | `_snippet()` and vector evidence extraction | `"This module handles..."` |
+| LanceDB content reservoir | First 2000 chars retained in `content_snippet`; summary readers cut their requested width from this stored prefix. | `STORED_SNIPPET_CHARS` and `LanceDBVectorStore` | `"This module handles..."` |
 | Answer cache row | Cached MCP answer payload. | `tool_answer.py` and `AnswerCache` ORM | `{question_hash, payload_json, provider_name, model_name}` |
 | Question hash | SHA-256 of normalized question text. | `tool_answer._hash_question()` | Same hash for `"How auth works?"` with extra whitespace/case |
 | Answer payload | Cached `get_answer` result. | `get_answer()` | `{answer, citations, confidence, fallback_targets, retrieval}` |
@@ -418,4 +419,3 @@ For a file `src/auth/session.py`, a typical Repowise index can compute:
 6. Analysis rows: maybe a security finding `hardcoded_secret`, or a decision record from `# DECISION: store sessions in Redis`.
 7. Generated docs: `file_page:src/auth/session.py`, source hash, token counts, summary, freshness, and vector/FTS entries.
 8. Risk output: `hotspot_score=0.88`, trend `increasing`, risk type `churn-heavy`, co-change partners, test-gap flag, and an impact surface.
-

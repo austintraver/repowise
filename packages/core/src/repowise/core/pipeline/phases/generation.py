@@ -13,6 +13,7 @@ from typing import Any
 import structlog
 
 from repowise.core.pipeline.progress import ProgressCallback
+from repowise.core.pipeline.repository_identity import repository_generation_name
 
 from ._common import _phase_done
 
@@ -44,6 +45,7 @@ async def run_generation(
     kg_data: dict | None = None,
     only_page_ids: set[str] | None = None,
     preserved_page_ids: set[str] | None = None,
+    repo_name: str | None = None,
 ) -> list[Any]:
     """Run LLM-powered page generation.
 
@@ -93,7 +95,7 @@ async def run_generation(
     jobs_dir.mkdir(parents=True, exist_ok=True)
     job_system = JobSystem(jobs_dir)
 
-    repo_name = repo_path.name
+    resolved_repo_name = repo_name or repository_generation_name(repo_path)
 
     # Track generation progress. Onboarding pages get routed to their own
     # phase so the terminal UI shows them as a distinct, named step rather
@@ -137,7 +139,7 @@ async def run_generation(
         source_map,
         graph_builder,
         repo_structure,
-        repo_name,
+        resolved_repo_name,
         job_system=job_system,
         on_page_done=on_page_done,
         on_total_known=on_total_known,
