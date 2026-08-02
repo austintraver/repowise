@@ -399,6 +399,16 @@ class BaseProvider(ABC):
         """
         ...
 
+    def generation_request_options(self) -> dict[str, Any]:
+        """Return provider settings that can change generated content.
+
+        Page reuse includes these settings in its request fingerprint. Most
+        providers have no constructor-level generation settings, so the
+        default is empty.
+        """
+
+        return {}
+
     def supported_reasoning_modes(self) -> tuple[ReasoningMode, ...]:
         """Return reasoning modes supported by this provider/model.
 

@@ -62,6 +62,7 @@ class OutlineCallTrace:
     max_tokens: int
     sampling: dict[str, float | int]
     reasoning: str
+    provider_options: dict[str, Any]
     raw_response: str | None
     raw_provider_response: dict[str, Any] | None
     input_tokens: int | None
@@ -93,6 +94,7 @@ class OutlineCallTrace:
         max_tokens: int,
         sampling: dict[str, float | int],
         reasoning: str,
+        provider_options: dict[str, Any],
         response: GeneratedResponse | None,
         parse_outcome: ParseOutcome,
         error: BaseException | None,
@@ -116,6 +118,7 @@ class OutlineCallTrace:
             max_tokens=max_tokens,
             sampling=dict(sampling),
             reasoning=reasoning,
+            provider_options=dict(provider_options),
             raw_response=raw_response,
             raw_provider_response=(
                 dict(response.provider_response)

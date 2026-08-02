@@ -434,6 +434,21 @@ export OLLAMA_BASE_URL="http://localhost:11434"
 repowise init --provider ollama --model llama3.2
 ```
 
+To make Repowise request a specific Ollama context window without creating a
+second model tag, add it to the provider section:
+
+```yaml
+provider: ollama
+model: gemma4:26b-mxfp8
+ollama:
+  base_url: http://localhost:11434
+  num_ctx: 262144
+```
+
+Repowise sends `num_ctx` on native Ollama generation requests. When it is
+omitted, Ollama retains its model or server default. The value must be a
+positive integer.
+
 ### LiteLLM (100+ providers)
 
 ```bash

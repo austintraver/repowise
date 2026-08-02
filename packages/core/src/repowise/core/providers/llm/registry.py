@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import importlib
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from repowise.core.providers.llm.base import BaseProvider
@@ -199,6 +199,27 @@ def provider_kwargs(
         kwargs["base_url"] = base_url
     if repo_path is not None and name in REPO_PATH_PROVIDERS:
         kwargs["repo_path"] = repo_path
+    return kwargs
+
+
+def provider_config_kwargs(name: str, config: Mapping[str, Any]) -> dict[str, Any]:
+    """Return constructor settings from a provider's config section.
+
+    Environment-derived values are resolved separately by
+    :func:`provider_kwargs`; callers apply these as fallbacks so environment
+    variables retain their existing precedence.
+    """
+
+    section = config.get(name)
+    if not isinstance(section, Mapping):
+        return {}
+
+    kwargs: dict[str, Any] = {}
+    base_url = section.get("base_url")
+    if base_url:
+        kwargs["base_url"] = base_url
+    if name == "ollama" and "num_ctx" in section:
+        kwargs["num_ctx"] = section["num_ctx"]
     return kwargs
 
 

@@ -117,6 +117,33 @@ def test_kimi_repo_config_passes_key_model_and_base_url(clean_env, tmp_path, mon
     assert captured["base_url"] == "https://kimi.example/v1"
 
 
+def test_ollama_repo_config_passes_context_window(clean_env, tmp_path, monkeypatch):
+    repo = _make_repo(
+        tmp_path / "repo",
+        config="""
+            provider: ollama
+            model: gemma4:26b-mxfp8
+            embedder: ollama
+            ollama:
+              num_ctx: 262144
+        """,
+    )
+    captured: dict = {}
+
+    def fake_get_provider(provider_id, **kwargs):
+        captured["provider_id"] = provider_id
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("repowise.core.providers.llm.registry.get_provider", fake_get_provider)
+
+    pc.get_chat_provider_instance(repo_path=str(repo), repo_id="ollama-repo")
+
+    assert captured["provider_id"] == "ollama"
+    assert captured["model"] == "gemma4:26b-mxfp8"
+    assert captured["num_ctx"] == 262144
+
+
 # ---------------------------------------------------------------------------
 # Precedence + no cross-repo shadowing.
 # ---------------------------------------------------------------------------

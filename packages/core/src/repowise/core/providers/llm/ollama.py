@@ -139,6 +139,9 @@ class OllamaProvider(BaseProvider):
         model:        Ollama model name (e.g., 'qwen3.5:4b', 'llama3.2').
                       Must be pulled first: `ollama pull <model>`
         base_url:     Ollama server URL. Defaults to http://localhost:11434.
+        num_ctx:      Optional context window sent with every native generation
+                      request. When omitted, Ollama chooses its server or model
+                      default.
         rate_limiter: Optional RateLimiter (useful when running multiple
                       concurrent requests against a resource-constrained machine).
     """
@@ -156,14 +159,20 @@ class OllamaProvider(BaseProvider):
         self,
         model: str = "qwen3.5:4b",
         base_url: str | None = None,
+        num_ctx: int | None = None,
         rate_limiter: RateLimiter | None = None,
     ) -> None:
+        if num_ctx is not None and (
+            isinstance(num_ctx, bool) or not isinstance(num_ctx, int) or num_ctx <= 0
+        ):
+            raise ValueError("num_ctx must be a positive integer")
         resolved_base_url = base_url or os.environ.get("OLLAMA_BASE_URL") or _DEFAULT_BASE_URL
         self._base_url = resolved_base_url.rstrip("/").removesuffix("/v1")
         self._client = AsyncOpenAI(
             api_key="ollama", base_url=_normalize_base_url(self._base_url)
         )
         self._model = model
+        self.num_ctx = num_ctx
         self._rate_limiter = rate_limiter
 
     @property
@@ -173,6 +182,13 @@ class OllamaProvider(BaseProvider):
     @property
     def model_name(self) -> str:
         return self._model
+
+    def generation_request_options(self) -> dict[str, Any]:
+        """Return the configured Ollama context for request identity."""
+
+        if self.num_ctx is None:
+            return {}
+        return {"num_ctx": self.num_ctx}
 
     def supported_reasoning_modes(self) -> tuple[ReasoningMode, ...]:
         return ("auto", *_OLLAMA_REASONING_MODES)
@@ -264,6 +280,7 @@ class OllamaProvider(BaseProvider):
         options: dict[str, float | int] = {
             "num_predict": max_tokens,
             **outbound,
+            **self.generation_request_options(),
         }
         request_payload: dict[str, Any] = {
             "model": self._model,

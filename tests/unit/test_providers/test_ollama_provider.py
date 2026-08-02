@@ -124,6 +124,28 @@ async def test_generate_auto_uses_native_chat_and_forwards_sampling():
 
 
 @respx.mock
+async def test_generate_forwards_configured_context_window():
+    provider = OllamaProvider(model="test", num_ctx=262144)
+    route = respx.post("http://localhost:11434/api/chat").mock(
+        return_value=httpx.Response(
+            200,
+            json={"message": {"content": "ok"}, "done_reason": "stop"},
+        )
+    )
+
+    await provider.generate("system", "user")
+
+    assert b'"num_ctx":262144' in route.calls[0].request.read()
+    assert provider.generation_request_options() == {"num_ctx": 262144}
+
+
+@pytest.mark.parametrize("num_ctx", [0, -1, True, 1.5, "262144"])
+def test_context_window_must_be_a_positive_integer(num_ctx):
+    with pytest.raises(ValueError, match="num_ctx must be a positive integer"):
+        OllamaProvider(model="test", num_ctx=num_ctx)
+
+
+@respx.mock
 async def test_generate_off_disables_reasoning():
     provider = OllamaProvider(model="test")
     route = respx.post("http://localhost:11434/api/chat").mock(

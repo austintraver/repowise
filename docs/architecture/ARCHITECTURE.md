@@ -1633,6 +1633,7 @@ openai:
 
 ollama:
   base_url: http://localhost:11434
+  num_ctx: 262144             # optional; omitted uses Ollama's default
 
 generation:
   max_tokens: 4096

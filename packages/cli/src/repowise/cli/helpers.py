@@ -642,6 +642,7 @@ def resolve_provider(
     from repowise.core.providers import get_provider
     from repowise.core.providers.llm.registry import (
         PROVIDER_AUTODETECT_ORDER,
+        provider_config_kwargs,
         provider_credentials_present,
         provider_kwargs,
     )
@@ -666,31 +667,15 @@ def resolve_provider(
     if model is None and cfg.get("model"):
         model = cfg["model"]
 
-    def _config_base_url(name: str) -> str | None:
-        """Return a base_url the repo config sets for the provider, if any.
-
-        Env vars are handled by :func:`provider_kwargs` from the shared
-        registry mapping; this covers only the config-file source, which is
-        CLI-specific.
-        """
-        section = cfg.get(name)
-        if isinstance(section, dict):
-            base_url = section.get("base_url")
-            if base_url:
-                return base_url
-        return None
-
     def _build(name: str) -> Any:
         """Instantiate ``name`` with env-derived kwargs plus config fallbacks."""
         kwargs = provider_kwargs(name, model=model, repo_path=repo_path)
-        # Applied to any name, as before: openrouter takes a base_url without
-        # having an env var for one, so gating this on the env map would drop a
-        # config value that used to be honored. (A stray `mock: {base_url: …}`
-        # in config.yaml still reaches a constructor that has no such
-        # parameter and raises TypeError. Longstanding, orthogonal to #1119.)
-        config_base_url = _config_base_url(name)
-        if config_base_url:
-            kwargs.setdefault("base_url", config_base_url)
+        # Provider-section values are config fallbacks: an environment URL
+        # keeps its existing precedence. The helper also carries Ollama's
+        # request context, whose config-only source has no environment
+        # counterpart.
+        for key, value in provider_config_kwargs(name, cfg).items():
+            kwargs.setdefault(key, value)
         try:
             return get_provider(name, **kwargs)
         except click.ClickException:
