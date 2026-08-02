@@ -818,6 +818,39 @@ class TestEntryPointFlag:
         assert "pkg/helper.py" not in flagged
         assert "latest_app.py" not in flagged
 
+    def test_non_code_entry_stems_do_not_flag_documents(self, tmp_path: Path) -> None:
+        files = {
+            "docs/index.md": "# Research index",
+            "samples/main.json": '{"example": true}',
+            "src/index.py": "print('x')",
+        }
+        for relative_path, content in files.items():
+            candidate = tmp_path / relative_path
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            candidate.write_text(content)
+
+        flagged = self._flagged(tmp_path)
+
+        assert flagged == {"src/index.py"}
+
+    def test_language_specific_entry_stems_do_not_leak_to_other_languages(
+        self, tmp_path: Path
+    ) -> None:
+        files = {
+            "python/asgi.py": "application = object()",
+            "python/lib.py": "VALUE = 1",
+            "rust/lib.rs": "pub fn value() -> i32 { 1 }",
+            "web/asgi.ts": "export const application = {};",
+        }
+        for relative_path, content in files.items():
+            candidate = tmp_path / relative_path
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            candidate.write_text(content)
+
+        flagged = self._flagged(tmp_path)
+
+        assert flagged == {"python/asgi.py", "rust/lib.rs"}
+
     def test_pyproject_console_scripts_flag_entry_modules(self, tmp_path: Path) -> None:
         (tmp_path / "pyproject.toml").write_text(
             "[project]\n"

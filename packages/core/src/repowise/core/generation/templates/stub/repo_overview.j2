@@ -13,6 +13,9 @@
 
 ## Project Summary
 
+{% if ctx.declared_purpose %}
+{{ ctx.declared_purpose.text }}
+{% else %}
 {# Sort by share, do not take the first key: language_distribution is an
    unordered dict, and taking item 0 called a 59%-Python repo a "dockerfile
    codebase" because that is what happened to hash first. #}
@@ -23,6 +26,7 @@
 {%- if ctx.entry_points %} Execution starts at {% for ep in ctx.entry_points[:3] %}`{{ ep }}`{% if not loop.last %}, {% endif %}{% endfor %}{% if ctx.entry_points | length > 3 %} and {{ ctx.entry_points | length - 3 }} other entry point{{ "s" if ctx.entry_points | length - 3 != 1 else "" }}{% endif %}.{% endif %}
 {%- if ctx.communities %} Dependency analysis splits it into {{ ctx.communities | length }} clusters{% set _named = ctx.communities | selectattr("label") | list %}{% if _named %}, led by {% for c in _named[:3] %}**{{ c.label }}**{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}.{% endif %}
 {%- if ctx.external_systems %} It builds on {{ ctx.external_systems | length }} external {{ "dependency" if ctx.external_systems | length == 1 else "dependencies" }}, including {% for s in ctx.external_systems[:5] %}`{{ s.name }}`{% if not loop.last %}, {% endif %}{% endfor %}.{% endif %}
+{% endif %}
 
 {% if ctx.packages %}
 ## Packages

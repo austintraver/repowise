@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import networkx as nx
 
 from repowise.core.generation import onboarding
+from repowise.core.generation.context_assembler import ContextAssembler
 from repowise.core.generation.models import compute_source_hash
 from repowise.core.generation.onboarding.grounding import check_grounding, collect_known
 from repowise.core.generation.onboarding.signals import OnboardingSignals
@@ -25,7 +26,9 @@ from repowise.core.generation.onboarding.subkinds.key_concepts import (
     ConceptSymbol,
     KeyConceptsContext,
 )
+from repowise.core.generation.page_generator import PageGenerator
 from repowise.core.ingestion.models import FileInfo, ParsedFile, RepoStructure, Symbol
+from repowise.core.providers.llm.mock import MockProvider
 
 # ---------------------------------------------------------------------------
 # Fixture builders: a ParsedFile + a real networkx symbol graph so the builder
@@ -214,6 +217,60 @@ def test_key_concepts_ranks_classes_over_methods() -> None:
     assert kinds == {"class"}
     # The most-depended-on class leads.
     assert names[0] == "LanguageRegistry"
+
+
+async def test_key_concepts_pipeline_stops_after_four_suitable_types(
+    sample_config,
+) -> None:
+    files = [
+        _file(
+            "domain/session.py",
+            [_sym("domain/session.py", "SessionReconstruction", "class", exported=True)],
+        ),
+        _file(
+            "domain/entry.py",
+            [_sym("domain/entry.py", "ConversationEntry", "class", exported=True)],
+        ),
+        _file(
+            "domain/registry.py",
+            [_sym("domain/registry.py", "ReaderRegistry", "class", exported=True)],
+        ),
+        _file(
+            "domain/attribution.py",
+            [_sym("domain/attribution.py", "AttributionDecision", "class", exported=True)],
+        ),
+        _file(
+            "runtime/load.py",
+            [_sym("runtime/load.py", "load_transcript", "function", exported=True)],
+        ),
+        _file(
+            "runtime/normalize.py",
+            [_sym("runtime/normalize.py", "normalize_entries", "function", exported=True)],
+        ),
+    ]
+    graph_builder = _graph_builder(files, [])
+    signals = _signals(files, graph_builder)
+    spec = onboarding.get_spec(SLOT_KEY_CONCEPTS)
+    assert spec is not None
+    provider = MockProvider()
+    generator = PageGenerator(
+        provider,
+        ContextAssembler(sample_config),
+        sample_config,
+    )
+
+    await generator.generate_onboarding_page(spec, signals)
+
+    prompt = str(provider.calls[0]["user_prompt"])
+    for concept_name in (
+        "SessionReconstruction",
+        "ConversationEntry",
+        "ReaderRegistry",
+        "AttributionDecision",
+    ):
+        assert concept_name in prompt
+    assert "load_transcript" not in prompt
+    assert "normalize_entries" not in prompt
 
 
 def test_key_concepts_spreads_across_clusters() -> None:

@@ -1,9 +1,12 @@
-You are writing the "How It Works" page for `{{ ctx.repo_name }}` — the
-page that turns the static architecture into a movie. One concrete
-end-to-end trace through the system, narrated phase by phase.
+{% set is_component_trace = ctx.is_monorepo or ctx.flow_scope == "internal" %}
+You are writing the "How It Works" page for `{{ ctx.repo_name }}`. Narrate
+exactly one observed call trace. The trace may describe the repository's
+public execution path or only one internal component; its scope is stated
+below.
 
-{% if ctx.is_monorepo %}
+{% if is_component_trace %}
 ## Scope
+{% if ctx.is_monorepo %}
 `{{ ctx.repo_name }}` is a monorepo with {{ ctx.package_count }} detected
 packages. The evidence below describes one component flow, not a
 repository-wide lifecycle. Do not characterize the whole repository as one
@@ -11,6 +14,13 @@ service, library, CLI, or pipeline.
 
 No repository-wide archetype is inferred for a monorepo. Narrate the selected
 flow directly from its symbols.
+{% else %}
+The selected evidence is an internal component trace beginning at
+`{{ ctx.flows[0].entry_point }}`. That path is not one of the repository's
+operational entry points, so this trace does not establish how the whole
+repository starts or completes its work. Describe only the observed component
+calls and do not apply the archetype hint to the repository.
+{% endif %}
 
 {% else %}
 ## Detected archetype (treat as a hint, not gospel)
@@ -39,7 +49,7 @@ flow directly from its symbols.
 {% endif %}
 
 {% if ctx.flows %}
-## Detected execution flows (use these as the spine of the narrative)
+## Detected execution trace (use this as the spine of the narrative)
 {% for f in ctx.flows %}
 ### Flow from `{{ f.entry_point }}` (score: {{ "%.3f"|format(f.score) }})
 {% for hop in f.hop_evidence %}
@@ -61,17 +71,20 @@ entry points and the archetype hint above.*
 ## What to write
 Produce a How It Works markdown page. Required structure:
 
-1. **## What this {% if ctx.is_monorepo %}component{% else %}system{% endif %} does in one sentence** — open with a single,
-   concrete sentence that captures the system's job, adapted to the
-   archetype above (service / cli / library / pipeline / module).
-{% if ctx.is_monorepo %}
+1. **## What this {% if is_component_trace %}component{% else %}system{% endif %} does in one sentence** — open with a single,
+   concrete sentence that captures only the scope established above.
+{% if is_component_trace %}
    Start the sentence with "This page traces" and name the real traced entry
-   point within the {{ ctx.package_count }}-package `{{ ctx.repo_name }}`
-   monorepo. Describe only that component's observed role. Do not call the
-   repository itself a service, library, CLI, pipeline, or system.
+   point{% if ctx.is_monorepo %} within the {{ ctx.package_count }}-package
+   `{{ ctx.repo_name }}` monorepo{% endif %}. Describe only that component's
+   observed role. Do not call the repository itself a service, library, CLI,
+   pipeline, or system.
+{% else %}
+   Adapt it to the archetype above (service / cli / library / pipeline /
+   module).
 {% endif %}
 2. **## A walk through one example** — the heart of the page. Pick one
-   concrete example{% if not ctx.is_monorepo %} matching the archetype:
+   concrete example{% if not is_component_trace %} matching the archetype:
    - service → "when a request hits `<a real entry point>`, …"
    - cli → "when you run `<the real CLI entry>`, …"
    - library → "when a consumer calls `<a real public symbol>`, …"

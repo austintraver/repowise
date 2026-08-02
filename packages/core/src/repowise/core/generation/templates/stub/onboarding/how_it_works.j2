@@ -6,16 +6,25 @@
 -#}
 # How It Works
 
+{% if ctx.is_monorepo or ctx.flow_scope == "internal" %}
+This page follows one observed component trace. What happens at each hop is not derivable from the call graph, so it shows the shape of the calls rather than claiming a repository-wide lifecycle.
+{% else %}
 Traced from the entry points outward: which files each run touches, in order. What happens at each hop is not derivable from the call graph, so this page shows the shape of execution rather than the behaviour.
+{% endif %}
 
 {% if ctx.is_monorepo %}
 This repository contains {{ ctx.package_count }} detected packages. The trace below is one component example, not a repository-wide lifecycle.
+
+{% elif ctx.flow_scope == "internal" %}
+This is an internal component trace, not a repository-wide lifecycle.
 
 {% endif %}
 ## Shape
 
 {% if ctx.is_monorepo %}
 No repository-wide archetype is inferred for this monorepo.
+{% elif ctx.flow_scope == "internal" %}
+The selected trace does not begin at an operational entry point, so no repository-wide archetype is inferred from it.
 {% else %}
 {#- archetype can come through empty on a repo with no recognised sources;
     indexing it unguarded raises under StrictUndefined and loses the page. -#}

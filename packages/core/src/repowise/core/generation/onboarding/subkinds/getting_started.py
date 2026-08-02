@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from ...repository_evidence import find_root_readme
 from ..registry import SubkindSpec, register
 from ..signals import OnboardingSignals
 from ..slots import SLOT_GETTING_STARTED, SLOT_TITLES
@@ -38,7 +39,6 @@ _README_HEADINGS: tuple[tuple[str, str], ...] = (
     ("contributing", "Contributing"),
 )
 
-_README_FILENAMES = ("README.md", "readme.md", "README.MD", "README", "Readme.md")
 _MAX_README_SECTION_CHARS = 800
 _MAX_DEPS_LISTED = 12
 
@@ -57,19 +57,6 @@ class GettingStartedContext:
     dev_dependencies: list[dict] = field(default_factory=list)
     readme_sections: list[ReadmeSection] = field(default_factory=list)
     entry_points: list[str] = field(default_factory=list)
-
-
-def _find_readme(source_map: dict[str, bytes]) -> bytes | None:
-    """Return the first repo-root README we can find, or None."""
-    for name in _README_FILENAMES:
-        data = source_map.get(name)
-        if data:
-            return data
-    # Fallback: any path whose basename matches and lives at repo root.
-    for path, data in source_map.items():
-        if "/" not in path and path.lower() in ("readme", "readme.md", "readme.txt"):
-            return data
-    return None
 
 
 def _extract_setup_sections(readme: bytes) -> list[ReadmeSection]:
@@ -161,9 +148,9 @@ def _partition_dependencies(
 def _build(signals: OnboardingSignals) -> GettingStartedContext | None:
     package_managers, runtime, dev = _partition_dependencies(signals.external_systems)
     readme_sections: list[ReadmeSection] = []
-    readme_bytes = _find_readme(signals.source_map)
-    if readme_bytes is not None:
-        readme_sections = _extract_setup_sections(readme_bytes)
+    readme = find_root_readme(signals.source_map)
+    if readme is not None:
+        readme_sections = _extract_setup_sections(readme[1])
 
     # Gate: need at least one signal source. Without a manifest *and*
     # without a README setup section, the page would be all speculation.

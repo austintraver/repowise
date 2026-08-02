@@ -176,6 +176,31 @@ class LanguageRegistry:
             stem for s in self._specs.values() for stem in s.entry_flag_stems
         )
 
+    def is_entry_point_filename(self, tag: str, filename: str) -> bool:
+        """Return whether *filename* is entry-point evidence for *tag*.
+
+        Generic stems such as ``main`` apply to every code language. Exact
+        names, wildcard suffixes, and extra stems declared by one language
+        apply only to that language.
+        """
+        spec = self._specs.get(tag)
+        if spec is None or not spec.is_code:
+            return False
+
+        basename = filename.rsplit("/", 1)[-1]
+        stem = basename.rsplit(".", 1)[0].lower()
+        if stem in _GENERIC_ENTRY_FLAG_STEMS or stem in spec.entry_flag_stems:
+            return True
+
+        for pattern in spec.entry_point_patterns:
+            pattern_basename = pattern.rsplit("/", 1)[-1]
+            if pattern_basename.startswith("*"):
+                if basename.endswith(pattern_basename[1:]):
+                    return True
+            elif basename == pattern_basename:
+                return True
+        return False
+
     def test_stem_prefixes(self) -> tuple[str, ...]:
         """Union of test filename-stem prefixes, sorted for determinism."""
         return tuple(sorted({p for s in self._specs.values() for p in s.test_stem_prefixes}))

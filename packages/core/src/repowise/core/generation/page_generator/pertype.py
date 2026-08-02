@@ -24,6 +24,10 @@ from ..models import (
     STUB_FALLBACK_ERROR,
     GeneratedPage,
 )
+from ..repository_evidence import (
+    extract_declared_purpose,
+    merge_missing_overview_sections,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -266,6 +270,7 @@ class PerTypeGenerationMixin:
         external_systems: list[dict] | None = None,
         decision_records: list[dict] | None = None,
         overview_mermaid: str | None = None,
+        source_map: dict[str, bytes] | None = None,
     ) -> GeneratedPage:
         ctx = self._assembler.assemble_repo_overview(
             repo_structure,
@@ -276,6 +281,7 @@ class PerTypeGenerationMixin:
             repo_name=repo_name,
             external_systems=external_systems,
             decision_records=decision_records,
+            declared_purpose=extract_declared_purpose(source_map or {}),
         )
         repo_git_summary = None
         if git_meta_map:
@@ -312,6 +318,20 @@ class PerTypeGenerationMixin:
             return _with_architecture_map(
                 _stub_fallback(stub, "repo_overview", exc), overview_mermaid
             )
+        provider_content = response.content
+        structural_overview = self._stub_repo_overview(
+            ctx,
+            repo_name,
+            f"Repository Overview: {repo_name}",
+            repo_git_summary,
+        )
+        response = replace(
+            response,
+            content=merge_missing_overview_sections(
+                response.content,
+                structural_overview.content,
+            ),
+        )
         # The overview carries the architecture map itself. It is the
         # deterministic KG-derived diagram, not one the model drew, and
         # embedding is idempotent so a reused page picks it up too.
@@ -322,6 +342,13 @@ class PerTypeGenerationMixin:
                     response.content, overview_mermaid, heading="## Architecture map"
                 ),
             )
+        if (
+            response.content != provider_content
+            and response.usage.get("reused_from_prior_run")
+        ):
+            updated_usage = dict(response.usage)
+            updated_usage.pop("reused_from_prior_run", None)
+            response = replace(response, usage=updated_usage)
         return self._build_generated_page(
             "repo_overview",
             repo_name,
@@ -436,7 +463,9 @@ class PerTypeGenerationMixin:
                 count=len(ungrounded),
                 tokens=ungrounded[:20],
             )
-            response = replace(response, content=cleaned)
+            updated_usage = dict(response.usage)
+            updated_usage.pop("reused_from_prior_run", None)
+            response = replace(response, content=cleaned, usage=updated_usage)
         page = self._build_generated_page(
             "onboarding",
             target,

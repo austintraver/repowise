@@ -16,6 +16,7 @@ flow.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -24,6 +25,8 @@ from ..signals import OnboardingSignals
 from ..slots import SLOT_HOW_IT_WORKS, SLOT_TITLES
 
 Archetype = Literal["service", "cli", "library", "pipeline", "module"]
+FlowScope = Literal["public", "internal"]
+SIGNATURE_IDENTIFIER = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 
 _MIN_TRACE_HOPS = 3
 _TOP_FLOWS = 3
@@ -88,7 +91,9 @@ class FlowTrace:
     hops: list[str] = field(default_factory=list)
     files: list[str] = field(default_factory=list)
     hop_evidence: list[dict[str, str]] = field(default_factory=list)
+    known_symbols: list[str] = field(default_factory=list)
     score: float = 0.0
+    scope: FlowScope = "internal"
 
 
 @dataclass
@@ -101,6 +106,7 @@ class HowItWorksContext:
     kg_tour_steps: list[dict] = field(default_factory=list)
     is_monorepo: bool = False
     package_count: int = 0
+    flow_scope: FlowScope = "public"
 
 
 def _classify_archetype(signals: OnboardingSignals) -> tuple[Archetype, list[str]]:
@@ -170,6 +176,9 @@ def _collect_flows(signals: OnboardingSignals) -> list[FlowTrace]:
             }
 
     flows: list[FlowTrace] = []
+    operational_entry_points = set(
+        getattr(signals.repo_structure, "entry_points", []) or []
+    )
     for flow in getattr(report, "flows", [])[:_TOP_FLOWS]:
         trace = list(getattr(flow, "trace", []) or [])
         if len(trace) < _MIN_TRACE_HOPS:
@@ -183,13 +192,24 @@ def _collect_flows(signals: OnboardingSignals) -> list[FlowTrace]:
             )
             for hop in displayed_trace
         ]
+        known_symbols = list(
+            dict.fromkeys(
+                identifier
+                for evidence in hop_evidence
+                for identifier in SIGNATURE_IDENTIFIER.findall(evidence["signature"])
+            )
+        )
+        entry_point = str(getattr(flow, "entry_point", ""))
+        entry_path = entry_point.split("::", 1)[0]
         flows.append(
             FlowTrace(
-                entry_point=str(getattr(flow, "entry_point", "")),
+                entry_point=entry_point,
                 hops=displayed_trace,
                 files=files,
                 hop_evidence=hop_evidence,
+                known_symbols=known_symbols,
                 score=float(getattr(flow, "score", 0.0) or 0.0),
+                scope="public" if entry_path in operational_entry_points else "internal",
             )
         )
     return flows
@@ -245,6 +265,7 @@ def _build(signals: OnboardingSignals) -> HowItWorksContext | None:
         kg_tour_steps=tour_steps,
         is_monorepo=bool(getattr(signals.repo_structure, "is_monorepo", False)),
         package_count=len(packages),
+        flow_scope=selected_flows[0].scope if selected_flows else "public",
     )
 
 
