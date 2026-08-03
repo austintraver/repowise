@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --script \"$(git rev-parse --show-toplevel)/.agents/hooks/use_graphify_profile.py\" --target codex",
+            "timeout": 5,
+            "statusMessage": "Checking Graphify model profile"
+          }
+        ]
+      }
+    ]
+  }
+}
