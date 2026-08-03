@@ -41,10 +41,13 @@ def hoenn_profile(
         "GRAPHIFY_API_TIMEOUT": "1800",
         "GRAPHIFY_MAX_OUTPUT_TOKENS": "32768",
         "GRAPHIFY_NO_BACKUP": "1",
-        "GRAPHIFY_OLLAMA_KEEP_ALIVE": "60m",
-        # Graphify sends num_ctx on every Ollama request, so an inherited value
-        # wins over the model's baked context. Pin it to the baked 64K.
-        "GRAPHIFY_OLLAMA_NUM_CTX": "65536",
+        # Ollama's OpenAI-compatible /v1 endpoint ignores the per-request
+        # options object and keep_alive that Graphify sends, so the old
+        # GRAPHIFY_OLLAMA_NUM_CTX / GRAPHIFY_OLLAMA_KEEP_ALIVE pins here were
+        # inert (verified by differential test on Ollama 0.31.2, 2026-08-03).
+        # Context is controlled solely by the alias's baked
+        # `PARAMETER num_ctx 65536`; residency by the Ollama server's own
+        # OLLAMA_KEEP_ALIVE setting.
         "OLLAMA_API_KEY": "ollama",
         "OLLAMA_MODEL": "gemma4:31b-mxfp8-ctx64k",
     }
@@ -110,6 +113,11 @@ def main() -> int:
         "GRAPHIFY_BACKEND",
         "GRAPHIFY_MAX_CONCURRENCY",
         "GRAPHIFY_TOKEN_BUDGET",
+        # Inert over Ollama's /v1 today, but launchd still injects a stale
+        # NUM_CTX=32768 globally; drop both so a future Graphify that honors
+        # them cannot inherit the stale value.
+        "GRAPHIFY_OLLAMA_NUM_CTX",
+        "GRAPHIFY_OLLAMA_KEEP_ALIVE",
     ):
         environment.pop(ignored_name, None)
     environment.update(environment_updates)
