@@ -38,10 +38,13 @@ def hoenn_profile(
     operation: ProfiledOperation,
 ) -> tuple[dict[str, str], list[str]]:
     environment = {
-        "GRAPHIFY_API_TIMEOUT": "900",
+        "GRAPHIFY_API_TIMEOUT": "1800",
         "GRAPHIFY_MAX_OUTPUT_TOKENS": "32768",
         "GRAPHIFY_NO_BACKUP": "1",
         "GRAPHIFY_OLLAMA_KEEP_ALIVE": "60m",
+        # Graphify sends num_ctx on every Ollama request, so an inherited value
+        # wins over the model's baked context. Pin it to the baked 64K.
+        "GRAPHIFY_OLLAMA_NUM_CTX": "65536",
         "OLLAMA_API_KEY": "ollama",
         "OLLAMA_MODEL": "gemma4:31b-mxfp8-ctx64k",
     }
