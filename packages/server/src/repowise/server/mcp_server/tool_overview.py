@@ -863,8 +863,6 @@ def _build_guided_tour(
         steps = []
         for s in tour:
             page_id = compute_page_id(s.get("page_type", "file_page"), s.get("target_path", ""))
-            if page_id not in sections:
-                continue
             steps.append(
                 {
                     "order": s.get("order"),

@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from types import SimpleNamespace
-
 from repowise.server.mcp_server.tool_overview import (
-    _build_guided_tour,
     _compact_overview_content,
     _dedupe_tour_steps,
     _module_description,
@@ -98,50 +94,3 @@ class TestDedupeTourSteps:
 
     def test_empty(self):
         assert _dedupe_tour_steps([]) == []
-
-
-class TestBuildGuidedTour:
-    def test_omits_stops_without_a_persisted_page(self):
-        overview_page = SimpleNamespace(
-            metadata_json=json.dumps(
-                {
-                    "guided_tour": [
-                        {
-                            "order": 1,
-                            "title": "Present file",
-                            "kind": "code",
-                            "reason": "An entry point.",
-                            "page_type": "file_page",
-                            "target_path": "src/main.py",
-                        },
-                        {
-                            "order": 2,
-                            "title": "Omitted file",
-                            "kind": "code",
-                            "reason": "An anchor.",
-                            "page_type": "file_page",
-                            "target_path": "src/not-selected.py",
-                        },
-                    ]
-                }
-            )
-        )
-        result: dict[str, object] = {}
-
-        _build_guided_tour(
-            overview_page,
-            result,
-            {"file_page:src/main.py": "2.1"},
-        )
-
-        assert result["guided_tour"] == [
-            {
-                "order": 1,
-                "title": "Present file",
-                "kind": "code",
-                "reason": "An entry point.",
-                "target_path": "src/main.py",
-                "page_id": "file_page:src/main.py",
-                "section": "2.1",
-            }
-        ]
