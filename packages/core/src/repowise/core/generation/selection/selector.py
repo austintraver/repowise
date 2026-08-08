@@ -273,6 +273,8 @@ def _passes_importance_floor(path: str) -> bool:
     ``__init__.py`` re-export files. Pages for either only dilute retrieval
     (test-file pages pushed real answers below rank 5 in dogfood), and neither
     says anything a reader cannot get from the file it re-exports or tests.
+    A curated tour can deliberately override this floor: that exception
+    creates the page it promises to navigate to.
 
     This used to gate only the coverage tail, back when the budget picked a
     fraction of the repo and the tail backfilled the rest. There is no tail any

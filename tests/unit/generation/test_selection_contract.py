@@ -3,8 +3,8 @@
 Nothing below the concept tree costs tokens, so selection rations nothing:
 every candidate that clears its bucket's floor gets a page. These tests pin
 that, and pin the two properties that follow from it: the floor still keeps
-tests and pure re-export modules out, and selection does not depend on whether
-an API key is present.
+tests and pure re-export modules out unless a curated tour explicitly requires
+one, and selection does not depend on whether an API key is present.
 """
 
 from __future__ import annotations
