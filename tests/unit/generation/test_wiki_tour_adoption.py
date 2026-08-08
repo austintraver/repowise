@@ -67,6 +67,36 @@ def test_curated_tour_keeps_only_materialized_pages(tmp_path):
     assert run.tour_stops[1]["reason"].startswith("An entry point")
 
 
+def test_curated_tour_omits_an_existing_source_file_without_a_page(tmp_path):
+    """An excluded ``__init__.py`` exists in source but has no file-page row."""
+    kg_path = _write_kg(
+        tmp_path,
+        {
+            "project": {"name": "test", "graph_mode": "flow"},
+            "nodes": [], "edges": [], "layers": [],
+            "tour": [
+                *CURATED_TOUR,
+                {
+                    "order": 3,
+                    "target_path": "src/package/__init__.py",
+                    "page_type": "file_page",
+                    "title": "__init__.py",
+                    "depth": 2,
+                    "kind": "code",
+                    "reason": "Package exports.",
+                    "layer_id": "layer:app",
+                },
+            ],
+        },
+    )
+    run = _run_stub(KnowledgeGraphContext(kg_path))
+    run.sel_file_paths = {"src/main.py"}
+
+    _GenerationRun._compute_ia(run)
+
+    assert [s["target_path"] for s in run.tour_stops] == ["test", "src/main.py"]
+
+
 def test_uncurated_kg_falls_back_to_computed_tour(tmp_path):
     # No graph_mode marker: the KG (and its tour, if any) predate curation —
     # the orchestrator must compute its own tour, not adopt a stale one.
