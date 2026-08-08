@@ -169,7 +169,7 @@ describe("buildPresentModel", () => {
 
   it("builds a walkthrough from the guided tour with time estimates", () => {
     const model = buildPresentModel([overview, mainFile]);
-    expect(model.walkthrough).toHaveLength(2);
+    expect(model.walkthrough).toHaveLength(1);
     expect(model.walkthrough[0]!.title).toBe("main.py");
     expect(model.walkthrough[0]!.reason).toBe("entry point");
     expect(model.walkthrough[0]!.sourcePageId).toBe("mf");

@@ -200,7 +200,10 @@ export function buildPresentModel(
   }
 
   // 5 — Where to start (guided-tour landmarks as one list slide)
-  const tour = readTour(overview);
+  const byPath = new Map(pages.map((p) => [p.target_path, p]));
+  const tour = readTour(overview).filter(
+    (stop) => stop.target_path !== undefined && byPath.has(stop.target_path),
+  );
   if (tour.length > 0) {
     const items = tour
       .slice(0, MAX_TOUR_STOPS)
@@ -230,7 +233,6 @@ export function buildPresentModel(
   });
 
   // Walkthrough — one step per guided-tour stop, in order.
-  const byPath = new Map(pages.map((p) => [p.target_path, p]));
   let walkthrough: PresentStep[] = tour.map((stop, i) => {
     const page = stop.target_path ? byPath.get(stop.target_path) : undefined;
     const body = page ? slideBody(page, STEP_BODY_CHARS) : "";

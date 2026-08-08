@@ -60,6 +60,33 @@ class TestEnrichTourWithWikiLinks:
         kg = json.loads(kg_path.read_text())
         assert kg["tour"][0]["wikiPageIds"] == ["file_page:src/main.py"]
 
+    def test_normalizes_the_overview_stop_to_the_overview_page(self, tmp_path):
+        kg_path = _write_kg(
+            tmp_path,
+            tour=[
+                {
+                    "order": 1,
+                    "title": "README.md",
+                    "page_type": "repo_overview",
+                    "target_path": "README.md",
+                },
+            ],
+        )
+        pages = [
+            FakePage(
+                page_id="repo_overview:example",
+                target_path="example",
+                page_type="repo_overview",
+            )
+        ]
+
+        count = enrich_tour_with_wiki_links(kg_path, pages)
+
+        assert count == 1
+        kg = json.loads(kg_path.read_text())
+        assert kg["tour"][0]["target_path"] == "example"
+        assert kg["tour"][0]["wikiPageIds"] == ["repo_overview:example"]
+
     def test_adds_wiki_page_ids(self, tmp_path):
         kg_path = _write_kg(
             tmp_path,

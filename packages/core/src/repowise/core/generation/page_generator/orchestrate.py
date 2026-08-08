@@ -555,13 +555,28 @@ class _GenerationRun:
         import_edges = self._file_import_edges()
 
         # When the indexed KG carries the curated tour (project.graph_mode is
-        # written only by the curation pass), adopt it wholesale instead of
-        # re-deriving a second, divergent tour from the raw graph: the curated
-        # tour knows the repo's honesty mode (flow/sparse/structural), walks
-        # imports-type edges only, and excludes support paths — and the wiki's
-        # file cards already cite its steps. One tour, every surface.
+        # written only by the curation pass), retain its ordering instead of
+        # re-deriving a second tour from the raw graph. Keep only stops whose
+        # pages this run will materialize, so every consumer can navigate the
+        # same tour without resolving a missing page.
         if self.kg_ctx.available and self.kg_ctx.get_graph_mode():
-            self.tour_stops = [dict(s) for s in self.kg_ctx.get_tour()]
+            for source_stop in self.kg_ctx.get_tour():
+                stop = dict(source_stop)
+                page_type = stop.get("page_type", "file_page")
+                target_path = stop.get("target_path", "")
+                if page_type == "repo_overview":
+                    if not self.selection.emit_repo_overview:
+                        continue
+                    stop["target_path"] = self.repo_name
+                elif page_type == "file_page":
+                    if target_path not in self.sel_file_paths:
+                        continue
+                elif page_type == "infra_page":
+                    if target_path not in self.sel_infra_paths:
+                        continue
+                else:
+                    continue
+                self.tour_stops.append(stop)
         if not self.tour_stops:
             # Tour: ordered stops over the selected file/infra pages + overview.
             stops = build_tour(

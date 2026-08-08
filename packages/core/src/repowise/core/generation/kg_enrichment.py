@@ -39,17 +39,27 @@ def enrich_tour_with_wiki_links(
         return 0
 
     page_id_map: dict[str, str] = {}
+    overview_page: Any | None = None
     for page in generated_pages:
         tp = getattr(page, "target_path", None)
         pid = getattr(page, "page_id", None)
         if tp and pid:
             page_id_map[tp] = pid
+        if getattr(page, "page_type", None) == "repo_overview":
+            overview_page = page
 
     enriched_tour: list[dict[str, Any]] = []
     for step in tour:
         wiki_ids: list[str] = []
         target_path = step.get("target_path")
-        if isinstance(target_path, str):
+        if step.get("page_type") == "repo_overview" and overview_page is not None:
+            target_path = getattr(overview_page, "target_path", None)
+            page_id = getattr(overview_page, "page_id", None)
+            if isinstance(target_path, str):
+                step["target_path"] = target_path
+            if isinstance(page_id, str):
+                wiki_ids.append(page_id)
+        elif isinstance(target_path, str):
             page_id = page_id_map.get(target_path)
             if page_id:
                 wiki_ids.append(page_id)

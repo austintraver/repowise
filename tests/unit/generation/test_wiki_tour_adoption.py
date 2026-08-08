@@ -32,6 +32,7 @@ def _run_stub(kg_ctx) -> SimpleNamespace:
         pagerank={},
         sel_file_paths=[],
         sel_infra_paths=[],
+        selection=SimpleNamespace(emit_repo_overview=True),
         repo_name="test",
     )
     stub._file_import_edges = lambda: []
@@ -50,7 +51,7 @@ CURATED_TOUR = [
 ]
 
 
-def test_curated_tour_adopted_verbatim(tmp_path):
+def test_curated_tour_keeps_only_materialized_pages(tmp_path):
     kg_path = _write_kg(
         tmp_path,
         {
@@ -60,8 +61,9 @@ def test_curated_tour_adopted_verbatim(tmp_path):
         },
     )
     run = _run_stub(KnowledgeGraphContext(kg_path))
+    run.sel_file_paths = {"src/main.py"}
     _GenerationRun._compute_ia(run)
-    assert [s["target_path"] for s in run.tour_stops] == ["README.md", "src/main.py"]
+    assert [s["target_path"] for s in run.tour_stops] == ["test", "src/main.py"]
     assert run.tour_stops[1]["reason"].startswith("An entry point")
 
 
