@@ -23,6 +23,7 @@ def build_generation_plan(
     skip_tests: bool = False,
     skip_infra: bool = False,
     kg_modules: list[dict] | None = None,
+    curated_tour: list[dict] | None = None,
 ) -> list[PageTypePlan]:
     """Return the per-page-type plan that ``generate_all`` will execute.
 
@@ -41,6 +42,9 @@ def build_generation_plan(
         steers which adjacent directories merge into a concept group, so its
         absence changes which pages exist rather than how many, and the
         estimate holds either way.
+    curated_tour:
+        Ordered graph-tour steps from the analysis result. File-level stops
+        are required page candidates, matching generation.
     """
     files = parsed_files
     if skip_tests:
@@ -70,6 +74,13 @@ def build_generation_plan(
             git_meta_map=None,
             config=config,
             kg_modules=kg_modules,
+            required_file_page_paths=tuple(
+                step["target_path"]
+                for step in curated_tour or []
+                if step.get("page_type", "file_page") == "file_page"
+                and isinstance(step.get("target_path"), str)
+                and step["target_path"]
+            ),
         )
     )
 

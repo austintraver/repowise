@@ -260,6 +260,15 @@ class _GenerationRun:
         from ..selection import SelectionInputs, select_pages
 
         kg_scores = _compute_kg_file_scores(self.kg_ctx)
+        required_file_page_paths: tuple[str, ...] = ()
+        if self.kg_ctx.available and self.kg_ctx.get_graph_mode():
+            required_file_page_paths = tuple(
+                stop["target_path"]
+                for stop in self.kg_ctx.get_tour()
+                if stop.get("page_type", "file_page") == "file_page"
+                and isinstance(stop.get("target_path"), str)
+                and stop["target_path"]
+            )
 
         selection = select_pages(
             SelectionInputs(
@@ -278,6 +287,7 @@ class _GenerationRun:
                 # map that steers concept grouping, so absence costs taste and
                 # never coverage.
                 kg_modules=self.kg_modules or self.kg_ctx.get_modules() or None,
+                required_file_page_paths=required_file_page_paths,
             )
         )
 

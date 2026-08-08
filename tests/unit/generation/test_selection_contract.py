@@ -156,6 +156,25 @@ def test_importance_floor_excludes_tests_and_reexports():
     assert len(sel.file_page_paths) == 6
 
 
+def test_curated_file_tour_stops_override_the_importance_floor():
+    """A graph tour cannot select source files that generation will skip."""
+    parsed, pagerank, betweenness, community = _build_synthetic_repo(3)
+    required_paths = ("tests/test_thing.py", "pkg0/__init__.py")
+    for path in required_paths:
+        parsed.append(FakeParsedFile(file_info=FakeFileInfo(path=path), symbols=[]))
+        pagerank[path] = 1.0
+        betweenness[path] = 0.0
+        community[path] = 0
+
+    inputs = _inputs(parsed, pagerank, betweenness, community, GenerationConfig(max_file_pages=3))
+    inputs.required_file_page_paths = required_paths
+
+    selection = select_pages(inputs)
+
+    assert set(required_paths).issubset(selection.file_page_paths)
+    assert len(selection.file_page_paths) == 3
+
+
 def test_selection_does_not_depend_on_having_a_key():
     """Keyed and keyless runs select exactly the same pages.
 

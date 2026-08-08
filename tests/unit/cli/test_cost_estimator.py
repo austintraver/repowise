@@ -128,6 +128,20 @@ class TestBuildGenerationPlan:
         plans = build_generation_plan([pf], builder, FakeConfig(), skip_tests=True)
         assert not any(p.page_type == "symbol_spotlight" for p in plans)
 
+    def test_curated_tour_file_gets_an_estimated_page(self):
+        fi = FakeFileInfo(path="tests/test_foo.py", language="python", is_test=True)
+        pf = FakeParsedFile(file_info=fi, symbols=[])
+        builder = _make_graph_builder([pf])
+
+        plans = build_generation_plan(
+            [pf],
+            builder,
+            FakeConfig(),
+            curated_tour=[{"page_type": "file_page", "target_path": fi.path}],
+        )
+
+        assert any(plan.page_type == "file_page" and plan.count == 1 for plan in plans)
+
     def test_scc_pages_counted(self):
         fi1 = FakeFileInfo(path="a.py", language="python")
         fi2 = FakeFileInfo(path="b.py", language="python")

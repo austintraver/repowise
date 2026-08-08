@@ -77,7 +77,9 @@ def estimate_generation(
     # Curated modules from the in-memory index result, so the plan/cost
     # estimate selects the same module set generation will (the artifact
     # file is not on disk yet during a fresh init).
-    kg_modules = getattr(getattr(result, "knowledge_graph_result", None), "modules", None) or None
+    knowledge_graph_result = getattr(result, "knowledge_graph_result", None)
+    kg_modules = getattr(knowledge_graph_result, "modules", None) or None
+    curated_tour = getattr(knowledge_graph_result, "tour", None) or None
 
     plans = build_generation_plan(
         result.parsed_files,
@@ -86,6 +88,7 @@ def estimate_generation(
         skip_tests,
         skip_infra,
         kg_modules=kg_modules,
+        curated_tour=curated_tour,
     )
     est = estimate_cost(
         plans,

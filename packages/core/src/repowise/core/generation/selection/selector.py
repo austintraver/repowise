@@ -174,6 +174,10 @@ class SelectionInputs:
     # concept group. Absent or partial degrades the grouping's taste, never
     # its coverage, because the partition itself needs no KG input.
     kg_modules: list[dict] | None = None
+    # File-level stops chosen by curated graph presentation. These take priority
+    # over the ordinary importance floor so a tour never points at a file page
+    # that the same generation subsequently declines to create.
+    required_file_page_paths: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -296,12 +300,14 @@ def _build_file_candidates(
     git = inputs.git_meta_map or {}
     kg_scores = inputs.kg_file_scores or {}
 
+    required_paths = set(inputs.required_file_page_paths)
     scored: list[tuple[float, str]] = []
     for p in inputs.parsed_files:
         if not _is_code_file(p):
             continue
         path = p.file_info.path
-        if not _passes_importance_floor(path):
+        is_required_tour_stop = path in required_paths
+        if not is_required_tour_stop and not _passes_importance_floor(path):
             continue
         is_hotspot = bool(git.get(path, {}).get("is_hotspot", False))
         s = score_file(
@@ -313,7 +319,7 @@ def _build_file_candidates(
             is_hotspot=is_hotspot,
             kg_bonus=kg_scores.get(path, 0.0),
         )
-        if s > 0.0:
+        if s > 0.0 or is_required_tour_stop:
             scored.append((s, path))
     scored.sort(key=lambda x: (-x[0], x[1]))
     # Three states, because "how many file pages" has three real answers.
@@ -332,7 +338,14 @@ def _build_file_candidates(
         cap = auto_file_page_cap(len(scored))
     if not cap:  # None (nothing to do) or 0 (explicitly unlimited)
         return scored
-    return scored[: max(1, cap)]
+    limit = max(1, cap)
+    required = [item for item in scored if item[1] in required_paths]
+    optional = [item for item in scored if item[1] not in required_paths]
+    # A curated stop is a promise that this run will create a file page. Keep
+    # those promises first and spend the remaining configured capacity on the
+    # normal ranking. When a user sets a cap below the tour size, the caller's
+    # later tour reconciliation retains only the generated prefix.
+    return required[:limit] + optional[: max(0, limit - len(required))]
 
 
 def _build_symbol_candidates(
