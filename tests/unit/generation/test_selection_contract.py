@@ -175,6 +175,23 @@ def test_curated_file_tour_stops_override_the_importance_floor():
     assert len(selection.file_page_paths) == 3
 
 
+def test_small_file_page_cap_keeps_the_opening_curated_tour_stops():
+    parsed, pagerank, betweenness, community = _build_synthetic_repo(3)
+    required_paths = ("tests/first.py", "pkg0/__init__.py", "tests/third.py")
+    for path in required_paths:
+        parsed.append(FakeParsedFile(file_info=FakeFileInfo(path=path), symbols=[]))
+        pagerank[path] = 1.0
+        betweenness[path] = 0.0
+        community[path] = 0
+
+    inputs = _inputs(parsed, pagerank, betweenness, community, GenerationConfig(max_file_pages=2))
+    inputs.required_file_page_paths = required_paths
+
+    selection = select_pages(inputs)
+
+    assert selection.file_page_paths == list(required_paths[:2])
+
+
 def test_selection_does_not_depend_on_having_a_key():
     """Keyed and keyless runs select exactly the same pages.
 

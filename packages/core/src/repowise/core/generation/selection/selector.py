@@ -341,7 +341,12 @@ def _build_file_candidates(
     if not cap:  # None (nothing to do) or 0 (explicitly unlimited)
         return scored
     limit = max(1, cap)
-    required = [item for item in scored if item[1] in required_paths]
+    by_path = {item[1]: item for item in scored}
+    required = [
+        by_path[path]
+        for path in dict.fromkeys(inputs.required_file_page_paths)
+        if path in by_path
+    ]
     optional = [item for item in scored if item[1] not in required_paths]
     # A curated stop is a promise that this run will create a file page. Keep
     # those promises first and spend the remaining configured capacity on the
