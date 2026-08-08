@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,50 +27,29 @@ class FakePage:
     page_type: str = "file_page"
 
 
-def _write_kg(tmp_path: Path, tour: list[dict], **extra: object) -> Path:
-    kg = {"nodes": [], "edges": [], "layers": [], "tour": tour, **extra}
-    kg_path = tmp_path / "knowledge-graph.json"
-    kg_path.write_text(json.dumps(kg), encoding="utf-8")
-    return kg_path
-
-
 # ---------------------------------------------------------------------------
 # enrich_tour_with_wiki_links
 # ---------------------------------------------------------------------------
 
 
 class TestEnrichTourWithWikiLinks:
-    def test_adds_wiki_page_id_for_a_target_path(self, tmp_path):
-        kg_path = _write_kg(
-            tmp_path,
-            tour=[
-                {
-                    "order": 1,
-                    "title": "Entry",
-                    "target_path": "src/main.py",
-                },
-            ],
-        )
+    def test_adds_wiki_page_id_for_a_target_path(self):
+        tour = [{"order": 1, "title": "Entry", "target_path": "src/main.py"}]
         pages = [FakePage(page_id="file_page:src/main.py", target_path="src/main.py")]
 
-        count = enrich_tour_with_wiki_links(kg_path, pages)
+        enriched_tour = enrich_tour_with_wiki_links(tour, pages)
 
-        assert count == 1
-        kg = json.loads(kg_path.read_text())
-        assert kg["tour"][0]["wikiPageIds"] == ["file_page:src/main.py"]
+        assert enriched_tour[0]["wikiPageIds"] == ["file_page:src/main.py"]
 
-    def test_normalizes_the_overview_stop_to_the_overview_page(self, tmp_path):
-        kg_path = _write_kg(
-            tmp_path,
-            tour=[
-                {
-                    "order": 1,
-                    "title": "README.md",
-                    "page_type": "repo_overview",
-                    "target_path": "README.md",
-                },
-            ],
-        )
+    def test_normalizes_the_overview_stop_to_the_overview_page(self):
+        tour = [
+            {
+                "order": 1,
+                "title": "README.md",
+                "page_type": "repo_overview",
+                "target_path": "README.md",
+            }
+        ]
         pages = [
             FakePage(
                 page_id="repo_overview:example",
@@ -80,142 +58,35 @@ class TestEnrichTourWithWikiLinks:
             )
         ]
 
-        count = enrich_tour_with_wiki_links(kg_path, pages)
+        enriched_tour = enrich_tour_with_wiki_links(tour, pages)
 
-        assert count == 1
-        kg = json.loads(kg_path.read_text())
-        assert kg["tour"][0]["target_path"] == "example"
-        assert kg["tour"][0]["wikiPageIds"] == ["repo_overview:example"]
+        assert enriched_tour[0]["target_path"] == "example"
+        assert enriched_tour[0]["wikiPageIds"] == ["repo_overview:example"]
 
-    def test_adds_wiki_page_ids(self, tmp_path):
-        kg_path = _write_kg(
-            tmp_path,
-            tour=[
-                {
-                    "order": 1,
-                    "title": "Entry",
-                    "nodeIds": ["file:src/main.py", "file:src/utils.py"],
-                },
-                {"order": 2, "title": "Core", "nodeIds": ["file:src/core.py"]},
-            ],
-        )
+    def test_omits_steps_without_a_materialized_page(self):
+        tour = [{"order": 1, "title": "Entry", "target_path": "src/missing.py"}]
+
+        assert enrich_tour_with_wiki_links(tour, []) == []
+
+    def test_keeps_links_for_every_materialized_file_in_a_step(self):
+        tour = [
+            {
+                "order": 1,
+                "title": "Entry",
+                "nodeIds": ["file:src/main.py", "file:src/utils.py"],
+            }
+        ]
         pages = [
             FakePage(page_id="file_page:src/main.py", target_path="src/main.py"),
-            FakePage(page_id="file_page:src/core.py", target_path="src/core.py"),
+            FakePage(page_id="file_page:src/utils.py", target_path="src/utils.py"),
         ]
-        count = enrich_tour_with_wiki_links(kg_path, pages)
-        assert count == 2
 
-        kg = json.loads(kg_path.read_text())
-        assert kg["tour"][0]["wikiPageIds"] == ["file_page:src/main.py"]
-        assert kg["tour"][1]["wikiPageIds"] == ["file_page:src/core.py"]
+        enriched_tour = enrich_tour_with_wiki_links(tour, pages)
 
-    def test_omits_steps_without_a_materialized_page(self, tmp_path):
-        kg_path = _write_kg(
-            tmp_path,
-            tour=[
-                {"order": 1, "title": "Entry", "nodeIds": ["file:src/missing.py"]},
-            ],
-        )
-        count = enrich_tour_with_wiki_links(kg_path, [])
-        assert count == 0
-
-        kg = json.loads(kg_path.read_text())
-        assert kg["tour"] == []
-
-    def test_preserves_existing_kg_data(self, tmp_path):
-        kg_path = _write_kg(
-            tmp_path,
-            tour=[
-                {"order": 1, "title": "Entry", "nodeIds": ["file:a.py"]},
-            ],
-            version="1.0.0",
-            project={"name": "test"},
-        )
-        pages = [FakePage(page_id="file_page:a.py", target_path="a.py")]
-        enrich_tour_with_wiki_links(kg_path, pages)
-
-        kg = json.loads(kg_path.read_text())
-        assert kg["version"] == "1.0.0"
-        assert kg["project"]["name"] == "test"
-        assert kg["tour"][0]["wikiPageIds"] == ["file_page:a.py"]
-
-    def test_multiple_files_in_step(self, tmp_path):
-        kg_path = _write_kg(
-            tmp_path,
-            tour=[
-                {
-                    "order": 1,
-                    "title": "Step",
-                    "nodeIds": [
-                        "file:a.py",
-                        "file:b.py",
-                        "file:c.py",
-                    ],
-                },
-            ],
-        )
-        pages = [
-            FakePage(page_id="file_page:a.py", target_path="a.py"),
-            FakePage(page_id="file_page:c.py", target_path="c.py"),
+        assert enriched_tour[0]["wikiPageIds"] == [
+            "file_page:src/main.py",
+            "file_page:src/utils.py",
         ]
-        count = enrich_tour_with_wiki_links(kg_path, pages)
-        assert count == 1
-
-        kg = json.loads(kg_path.read_text())
-        assert kg["tour"][0]["wikiPageIds"] == ["file_page:a.py", "file_page:c.py"]
-
-    def test_non_file_node_ids_skipped(self, tmp_path):
-        kg_path = _write_kg(
-            tmp_path,
-            tour=[
-                {
-                    "order": 1,
-                    "title": "Step",
-                    "nodeIds": [
-                        "class:src/models.py:User",
-                        "file:src/models.py",
-                    ],
-                },
-            ],
-        )
-        pages = [
-            FakePage(page_id="file_page:src/models.py", target_path="src/models.py"),
-        ]
-        enrich_tour_with_wiki_links(kg_path, pages)
-
-        kg = json.loads(kg_path.read_text())
-        assert kg["tour"][0]["wikiPageIds"] == ["file_page:src/models.py"]
-
-    def test_empty_tour_returns_zero(self, tmp_path):
-        kg_path = _write_kg(tmp_path, tour=[])
-        count = enrich_tour_with_wiki_links(kg_path, [])
-        assert count == 0
-
-    def test_invalid_json_returns_zero(self, tmp_path):
-        kg_path = tmp_path / "knowledge-graph.json"
-        kg_path.write_text("not json", encoding="utf-8")
-        count = enrich_tour_with_wiki_links(kg_path, [])
-        assert count == 0
-
-    def test_missing_file_returns_zero(self, tmp_path):
-        kg_path = tmp_path / "nonexistent.json"
-        count = enrich_tour_with_wiki_links(kg_path, [])
-        assert count == 0
-
-    def test_idempotent(self, tmp_path):
-        kg_path = _write_kg(
-            tmp_path,
-            tour=[
-                {"order": 1, "title": "Entry", "nodeIds": ["file:a.py"]},
-            ],
-        )
-        pages = [FakePage(page_id="file_page:a.py", target_path="a.py")]
-        enrich_tour_with_wiki_links(kg_path, pages)
-        enrich_tour_with_wiki_links(kg_path, pages)
-
-        kg = json.loads(kg_path.read_text())
-        assert kg["tour"][0]["wikiPageIds"] == ["file_page:a.py"]
 
 
 # ---------------------------------------------------------------------------

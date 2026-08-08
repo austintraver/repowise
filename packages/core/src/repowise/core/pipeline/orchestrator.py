@@ -845,6 +845,14 @@ async def run_pipeline(
             except (ValueError, KeyError, OSError, RuntimeError) as exc:
                 logger.error("knowledge_graph_enrichment_failed", error=str(exc), exc_info=True)
 
+        if knowledge_graph_result is not None and generated_pages is not None:
+            from repowise.core.generation.kg_enrichment import enrich_tour_with_wiki_links
+
+            knowledge_graph_result.tour = enrich_tour_with_wiki_links(
+                knowledge_graph_result.tour,
+                generated_pages,
+            )
+
     # ---- Execution flow tracing -----------------------------------------------
     execution_flow_report = None
     if progress:

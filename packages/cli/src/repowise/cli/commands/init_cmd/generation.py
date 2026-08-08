@@ -351,6 +351,14 @@ def run_repo_generation(
                 ),
             )
         )
+        knowledge_graph_result = getattr(result, "knowledge_graph_result", None)
+        if knowledge_graph_result is not None:
+            from repowise.core.generation.kg_enrichment import enrich_tour_with_wiki_links
+
+            knowledge_graph_result.tour = enrich_tour_with_wiki_links(
+                knowledge_graph_result.tour,
+                generated_pages,
+            )
 
     jobs_dir = Path(repo_path) / ".repowise" / "jobs"
     failed_page_ids: list[str] = []
