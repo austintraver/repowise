@@ -41,6 +41,25 @@ def _write_kg(tmp_path: Path, tour: list[dict], **extra: object) -> Path:
 
 
 class TestEnrichTourWithWikiLinks:
+    def test_adds_wiki_page_id_for_a_target_path(self, tmp_path):
+        kg_path = _write_kg(
+            tmp_path,
+            tour=[
+                {
+                    "order": 1,
+                    "title": "Entry",
+                    "target_path": "src/main.py",
+                },
+            ],
+        )
+        pages = [FakePage(page_id="file_page:src/main.py", target_path="src/main.py")]
+
+        count = enrich_tour_with_wiki_links(kg_path, pages)
+
+        assert count == 1
+        kg = json.loads(kg_path.read_text())
+        assert kg["tour"][0]["wikiPageIds"] == ["file_page:src/main.py"]
+
     def test_adds_wiki_page_ids(self, tmp_path):
         kg_path = _write_kg(
             tmp_path,
@@ -64,7 +83,7 @@ class TestEnrichTourWithWikiLinks:
         assert kg["tour"][0]["wikiPageIds"] == ["file_page:src/main.py"]
         assert kg["tour"][1]["wikiPageIds"] == ["file_page:src/core.py"]
 
-    def test_missing_pages_get_empty_list(self, tmp_path):
+    def test_omits_steps_without_a_materialized_page(self, tmp_path):
         kg_path = _write_kg(
             tmp_path,
             tour=[
@@ -75,7 +94,7 @@ class TestEnrichTourWithWikiLinks:
         assert count == 0
 
         kg = json.loads(kg_path.read_text())
-        assert kg["tour"][0]["wikiPageIds"] == []
+        assert kg["tour"] == []
 
     def test_preserves_existing_kg_data(self, tmp_path):
         kg_path = _write_kg(

@@ -1,9 +1,9 @@
-"""Post-generation KG enrichment — link tour steps to wiki page IDs.
+"""Post-generation KG enrichment — retain linked tour steps with wiki page IDs.
 
 After all wiki pages are generated, this module cross-references KG tour
-steps with the generated page list and writes ``wikiPageIds`` into each
-tour step. The enriched KG JSON is written back to disk so the frontend
-and MCP tools can navigate from tour steps to documentation pages.
+steps with the generated page list, writes ``wikiPageIds`` for resolvable
+steps, and omits stops without a materialized page. The enriched KG JSON is
+written back to disk so the frontend and MCP tools can navigate safely.
 
 No LLM call — pure dict lookup.  Runs after ``interlinking`` in the
 post-generation pipeline.
@@ -24,7 +24,7 @@ def enrich_tour_with_wiki_links(
     kg_json_path: Path,
     generated_pages: list[Any],
 ) -> int:
-    """Add ``wikiPageIds`` to tour steps in the KG JSON file.
+    """Keep tour steps with pages and add their ``wikiPageIds``.
 
     Returns the number of tour steps that gained at least one wiki link.
     """
@@ -45,18 +45,25 @@ def enrich_tour_with_wiki_links(
         if tp and pid:
             page_id_map[tp] = pid
 
-    enriched_count = 0
+    enriched_tour: list[dict[str, Any]] = []
     for step in tour:
         wiki_ids: list[str] = []
+        target_path = step.get("target_path")
+        if isinstance(target_path, str):
+            page_id = page_id_map.get(target_path)
+            if page_id:
+                wiki_ids.append(page_id)
         for nid in step.get("nodeIds", []):
             if nid.startswith("file:"):
                 path = nid[5:]
-                pid = page_id_map.get(path)
-                if pid:
-                    wiki_ids.append(pid)
-        step["wikiPageIds"] = wiki_ids
+                page_id = page_id_map.get(path)
+                if page_id and page_id not in wiki_ids:
+                    wiki_ids.append(page_id)
         if wiki_ids:
-            enriched_count += 1
+            step["wikiPageIds"] = wiki_ids
+            enriched_tour.append(step)
+
+    kg["tour"] = enriched_tour
 
     try:
         kg_json_path.write_text(json.dumps(kg, indent=2), encoding="utf-8")
@@ -67,6 +74,6 @@ def enrich_tour_with_wiki_links(
     log.info(
         "kg_enrichment.tour_wiki_links",
         total_steps=len(tour),
-        steps_with_links=enriched_count,
+        steps_with_links=len(enriched_tour),
     )
-    return enriched_count
+    return len(enriched_tour)
