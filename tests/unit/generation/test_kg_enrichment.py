@@ -25,6 +25,7 @@ class FakePage:
     page_id: str
     target_path: str
     page_type: str = "file_page"
+    metadata: dict[str, object] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +56,7 @@ class TestEnrichTourWithWikiLinks:
                 page_id="repo_overview:example",
                 target_path="example",
                 page_type="repo_overview",
+                metadata={},
             )
         ]
 
@@ -62,6 +64,7 @@ class TestEnrichTourWithWikiLinks:
 
         assert enriched_tour[0]["target_path"] == "example"
         assert enriched_tour[0]["wikiPageIds"] == ["repo_overview:example"]
+        assert pages[0].metadata == {"guided_tour": enriched_tour}
 
     def test_omits_steps_without_a_materialized_page(self):
         tour = [{"order": 1, "title": "Entry", "target_path": "src/missing.py"}]

@@ -7,7 +7,7 @@ def enrich_tour_with_wiki_links(
     tour: list[dict[str, Any]],
     generated_pages: list[Any],
 ) -> list[dict[str, Any]]:
-    """Return tour steps that point at generated pages, with their page IDs.
+    """Link the persisted graph and overview metadata to generated pages.
 
     This operates on the pipeline's in-memory graph result. Persistence writes
     that result afterwards, so a fresh initialization and a later update use
@@ -17,7 +17,9 @@ def enrich_tour_with_wiki_links(
     page_id_by_target_path = {
         page.target_path: page.page_id
         for page in generated_pages
-        if getattr(page, "target_path", None) and getattr(page, "page_id", None)
+        if getattr(page, "page_type", None) == "file_page"
+        and getattr(page, "target_path", None)
+        and getattr(page, "page_id", None)
     }
     overview_page = next(
         (
@@ -48,5 +50,8 @@ def enrich_tour_with_wiki_links(
         if page_ids:
             step["wikiPageIds"] = page_ids
             enriched_tour.append(step)
+
+    if overview_page is not None and isinstance(getattr(overview_page, "metadata", None), dict):
+        overview_page.metadata["guided_tour"] = enriched_tour
 
     return enriched_tour
